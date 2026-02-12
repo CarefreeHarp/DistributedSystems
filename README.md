@@ -1,4 +1,4 @@
-# Distributed Systems                              &  Initial Studies for High Performance Computing  
+# Distributed Systems & Initial Studies for High Performance Computing  
 Daniel Felipe Ramírez Vargas  
 
 This repository contains the projects developed related to *Distributed Systems*, *High Performance Computing (HPC)*, and *Parallel Programming*.  
