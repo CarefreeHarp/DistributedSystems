@@ -1,6 +1,6 @@
 # Distributed Systems & Initial Studies for High Performance Computing
 
-This repository contains the projects developed related to *Distributed Systems*, *High Performance Computing (HPC)*, and *Parallel Programming*.  
+This repository contains the projects developed related to Distributed Systems, High Performance Computing (HPC), and Parallel Programming.  
 
 Each directory corresponds to a subproject with its own implementation, experiments, and documentation.  
 Please see below the structure and description of each directory.
