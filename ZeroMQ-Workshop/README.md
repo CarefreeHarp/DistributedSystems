@@ -64,7 +64,7 @@ El archivo `config.json` en la raíz del proyecto centraliza puertos e IPs:
 }
 ```
 
-| Sección | Descripción |
+| Sección | Descripción | 
 |---------|-------------|
 | `server` | Dirección de bind del servidor ZMQ (`host:port`) |
 | `client` | Dirección del servidor ZMQ al que se conecta el cliente |
