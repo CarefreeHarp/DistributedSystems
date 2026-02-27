@@ -1,6 +1,0 @@
-Buenas tardes profesor,
-Enlace al repositorio (Porfavor ver el directorio "ZeroMQ-WorkShop" donde se encuentran los entregables de este taller):
-https://github.com/CarefreeHarp/DistributedSystems
-
-Enlace al video explicativo y de pruebas (A pesar de estar presente en la portada del documento):
-https://youtu.be/UueN0Ex7Fnc?si=lMeupzsUE1l_bUki
