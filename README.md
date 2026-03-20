@@ -34,11 +34,24 @@ Please see below the structure and description of each directory.
 
 ---
 
+- **MPI&OpenMP-PerformanceStudy**:  
+  Hybrid parallel matrix multiplication performance study implemented in **C using MPI and OpenMP**, comparing a **classic row-by-column approach** against a **transposed-matrix variant**.
+
+  The project benchmarks different matrix sizes, MPI process counts, and OpenMP thread configurations, storing repeated execution results for later analysis.
+
+  - Hybrid parallelism with MPI across nodes and OpenMP within each worker  
+  - Two multiplication strategies: classical and transposed  
+  - Automated benchmarking with 30 repetitions per configuration  
+  - Hostfile-based execution for process and thread experiments  
+  - `.dat` result generation plus supporting performance report documentation  
+
+---
+
 ## Technologies Used
 
 Across the different subprojects:
 
-- **C / MPI (OpenMPI)**
+- **C / MPI (OpenMPI) / OpenMP**
 - **Python**
 - **ZeroMQ**
 - **Flask + HTMX**
