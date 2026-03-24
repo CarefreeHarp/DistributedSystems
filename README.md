@@ -5,12 +5,7 @@ This repository contains the projects developed related to Distributed Systems, 
 Each directory corresponds to a subproject with its own implementation, experiments, and documentation.  
 Please see below the structure and description of each directory.
 
-The repository combines both **implementation-oriented workshops** and **performance-focused experimental studies**, so it can be used as:
-
-- A portfolio of distributed and parallel programming exercises
-- A reference for MPI / OpenMP benchmarking workflows
-- A base for reviewing client-server communication patterns with ZeroMQ
-
+The repository combines both **implementation-oriented workshops** and **performance-focused experimental studies**.
 ---
 
 ## General Overview
@@ -21,12 +16,12 @@ At a high level, the repository includes three main lines of work:
 - **A distributed library system with ZeroMQ**, exposed through a lightweight web interface
 - **A hybrid MPI + OpenMP performance study**, focused on comparing parallelization strategies
 
-This makes the repository especially useful for courses or labs related to:
+This makes the repository includes topics related to:
 
 - Distributed Systems
 - Parallel Programming
 - High Performance Computing
-- Experimental performance evaluation
+- Experimental performance evaluation (Benchmarks)
 
 ---
 
@@ -69,16 +64,6 @@ This makes the repository especially useful for courses or labs related to:
   - Automated benchmarking with 30 repetitions per configuration  
   - Hostfile-based execution for process and thread experiments  
   - `.dat` result generation plus supporting performance report documentation  
-
----
-
-## Suggested Reading Order
-
-If you are exploring the repository for the first time, a practical order is:
-
-1. Start with **ZeroMQ-Workshop** if you want to see a complete distributed application with visible user interaction.
-2. Continue with **MatrixMultiplicationDistributed-Workshop** if you want to review MPI-based task distribution and benchmarking.
-3. Finish with **MPI&OpenMP-PerformanceStudy** if your focus is performance comparison and hybrid parallelism.
 
 ---
 
