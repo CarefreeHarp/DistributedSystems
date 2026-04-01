@@ -47,7 +47,7 @@ At a high level, the repository includes three main lines of work:
 - **A distributed library system with ZeroMQ**, exposed through a lightweight web interface
 - **A hybrid MPI + OpenMP performance study**, focused on comparing parallelization strategies
 
-This makes the repository includes topics related to:
+This means the repository covers topics related to:
 
 - Distributed Systems
 - Parallel Programming
@@ -71,13 +71,13 @@ graph LR
     W3["💻 Worker 3"]
     W4["💻 Worker 4"]
     
-    Master -->|"Scatter filas A\nBcast B"| W1 & W2 & W3 & W4
+    Master -->|"Scatter rows of A\nBcast B"| W1 & W2 & W3 & W4
     W1 & W2 & W3 & W4 -->|"Gather C"| Master
 ```
 
-**Mini-muestra de resultados:**
+**Mini-sample of results:**
 
-| N | np | Tiempo promedio (s) |
+| N | np | Average time (s) |
 |---:|---:|---:|
 | 200 | 4 | ~0.013 |
 | 800 | 4 | ~0.35 |
@@ -103,11 +103,11 @@ graph LR
     Server -->|R/W| DB[("📁 DB.json")]
 ```
 
-**Mini-muestra de protocolo:**
+**Mini protocol sample:**
 ```json
-// Petición
+// Request
 { "action": "Prestamo por ISBN", "isbn": "9780307474278", "borrower": "Juan" }
-// Respuesta
+// Response
 { "success": true, "message": "Préstamo exitoso: 'Cien años de soledad'" }
 ```
 
@@ -124,21 +124,21 @@ Hybrid parallel matrix multiplication performance study implemented in **C using
 
 ```mermaid
 graph LR
-    subgraph FxC["Clásica (FxC)"]
-        A1["Fila A"] -.->|"stride N"| B1["Col B"]
+    subgraph FxC["Classical (FxC)"]
+        A1["Row A"] -.->|"stride N"| B1["Column B"]
     end
-    subgraph FxT["Transpuesta (FxT)"]
-        A2["Fila A"] -.->|"stride 1 ✓"| BT["Fila B^T"]
+    subgraph FxT["Transposed (FxT)"]
+        A2["Row A"] -.->|"stride 1 ✓"| BT["Row B^T"]
     end
 ```
 
-**Diseño experimental:**
+**Experimental design:**
 
-| Caso | Variable | Valores |
+| Case | Variable | Values |
 |------|----------|---------|
-| 1 | Procesos MPI | np = 5, 17, 33 (hilos=1) |
-| 2 | Hilos OpenMP | nH = 1, 4, 8 (np=5) |
-| 3 | Línea base | np=2, nH=1 (mismo nodo) |
+| 1 | MPI processes | np = 5, 17, 33 (threads=1) |
+| 2 | OpenMP threads | nH = 1, 4, 8 (np=5) |
+| 3 | Baseline | np=2, nH=1 (same node) |
 
   - Hybrid parallelism with MPI across nodes and OpenMP within each worker  
   - Two multiplication strategies: classical and transposed  

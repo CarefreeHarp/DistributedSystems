@@ -1,50 +1,50 @@
-# RMI-Workshop — Sistema de Biblioteca ZeroMQ
+# RMI-Workshop — ZeroMQ Library System
 
-Sistema de gestión de biblioteca implementado con **ZeroMQ** (comunicación cliente-servidor) y **Flask + HTMX** (interfaz web). Los puertos e IPs se configuran desde `config.json`.
+A library management system implemented with **ZeroMQ** (client-server communication) and **Flask + HTMX** (web interface). Ports and IPs are configured from `config.json`.
 
-## Arquitectura
+## Architecture
 
 ```mermaid
 graph LR
-    Browser["🌐 Navegador"]
+    Browser["🌐 Browser"]
     Config[("⚙️ config.json")]
-    Client["🖥️ Cliente Web\nFlask + HTMX"]
-    Server["⚙️ Servidor ZMQ\nLibraryService"]
+    Client["🖥️ Web Client\nFlask + HTMX"]
+    Server["⚙️ ZMQ Server\nLibraryService"]
     DB[("📁 DB.json")]
 
     Config -.->|host/port| Client
     Config -.->|host/port| Server
     Browser -->|HTTP| Client
-    Client <-->|"ZMQ REQ-REP\n(mensajes JSON)"| Server
-    Server -->|Lee/Escribe| DB
+    Client <-->|"ZMQ REQ-REP\n(JSON messages)"| Server
+    Server -->|Read/Write| DB
 ```
 
-## Operaciones disponibles
+## Available Operations
 
-| Operación | Acción ZMQ | Descripción |
+| Operation | ZMQ Action | Description |
 |-----------|------------|-------------|
-| Préstamo por ISBN | `Prestamo por ISBN` | Presta un libro buscándolo por su ISBN |
-| Préstamo por Título | `Prestamo por Titulo` | Presta un libro buscándolo por título |
-| Consulta por ISBN | `Consulta por ISBN` | Consulta la información de un libro |
-| Devolución por ISBN | `Devolucion por ISBN` | Devuelve un libro prestado |
+| Loan by ISBN | `Prestamo por ISBN` | Lends a book by searching for its ISBN |
+| Loan by Title | `Prestamo por Titulo` | Lends a book by searching for its title |
+| Query by ISBN | `Consulta por ISBN` | Queries the information of a book |
+| Return by ISBN | `Devolucion por ISBN` | Returns a borrowed book |
 
-## Modelo de datos
+## Data Model
 
-Cada libro en `DB.json` tiene la siguiente estructura:
+Each book in `DB.json` has the following structure:
 
-| Campo | Tipo | Descripción |
+| Field | Type | Description |
 |-------|------|-------------|
-| `ISBN` | `string` | Identificador único del libro |
-| `titulo` | `string` | Título del libro |
-| `autores` | `string[]` | Lista de autores |
-| `estado` | `string` | `"prestado"` o `"no prestado"` |
-| `prestatario` | `string \| null` | Nombre de quien tiene el libro prestado |
-| `fecha_prestamo` | `string \| null` | Fecha de préstamo (ISO 8601) |
-| `fecha_devolucion` | `string \| null` | Fecha límite de devolución (ISO 8601) |
+| `ISBN` | `string` | Unique identifier of the book |
+| `titulo` | `string` | Book title |
+| `autores` | `string[]` | List of authors |
+| `estado` | `string` | `"prestado"` or `"no prestado"` |
+| `prestatario` | `string \| null` | Name of the person who has the book on loan |
+| `fecha_prestamo` | `string \| null` | Loan date (ISO 8601) |
+| `fecha_devolucion` | `string \| null` | Return due date (ISO 8601) |
 
-## Configuración
+## Configuration
 
-El archivo `config.json` en la raíz del proyecto centraliza puertos e IPs:
+The `config.json` file at the root of the project centralizes ports and IPs:
 
 ```json
 {
@@ -64,42 +64,42 @@ El archivo `config.json` en la raíz del proyecto centraliza puertos e IPs:
 }
 ```
 
-| Sección | Descripción | 
+| Section | Description | 
 |---------|-------------|
-| `server` | Dirección de bind del servidor ZMQ (`host:port`) |
-| `client` | Dirección del servidor ZMQ al que se conecta el cliente |
-| `web` | Host, puerto y modo debug del servidor Flask |
+| `server` | ZMQ server bind address (`host:port`) |
+| `client` | Address of the ZMQ server the client connects to |
+| `web` | Host, port, and debug mode of the Flask server |
 
-## Requisitos
+## Requirements
 
 - Python 3.10+
 - pip
 
-## Instalación
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Ejecución
+## Execution
 
-Se necesitan **dos terminales**:
+You need **two terminals**:
 
-### Terminal 1 — Servidor ZeroMQ
+### Terminal 1 — ZeroMQ Server
 ```bash
 python -m server.main
 ```
-El servidor escuchará en la dirección configurada en `config.json` → `server` (por defecto `tcp://*:5555`).
+The server will listen on the address configured in `config.json` → `server` (default `tcp://*:5555`).
 
-### Terminal 2 — Cliente Web
+### Terminal 2 — Web Client
 ```bash
 python -m client.app
 ```
-Abrir el navegador en: [http://localhost:5000](http://localhost:5000) (o el puerto configurado en `config.json` → `web.port`).
+Open the browser at: [http://localhost:5000](http://localhost:5000) (or the port configured in `config.json` → `web.port`).
 
-## Protocolo de mensajes (JSON sobre ZMQ)
+## Message Protocol (JSON over ZMQ)
 
-**Petición (préstamo):**
+**Request (loan):**
 ```json
 {
   "action": "Prestamo por ISBN",
@@ -108,7 +108,7 @@ Abrir el navegador en: [http://localhost:5000](http://localhost:5000) (o el puer
 }
 ```
 
-**Respuesta:**
+**Response:**
 ```json
 {
   "success": true,
@@ -125,24 +125,24 @@ Abrir el navegador en: [http://localhost:5000](http://localhost:5000) (o el puer
 }
 ```
 
-## Estructura del proyecto
+## Project Structure
 
 ```
 RMI-Workshop/
 ├── README.md
 ├── requirements.txt
-├── config.json                # Configuración de puertos e IPs
-├── DB.json                    # Base de datos de libros
+├── config.json                # Port and IP configuration
+├── DB.json                    # Book database
 ├── .gitignore
 ├── server/
 │   ├── __init__.py
-│   ├── main.py                # Arranque del servidor ZMQ
-│   ├── library_service.py     # Servicio ZMQ (REP socket)
-│   └── db.py                  # Acceso a datos (DB.json)
+│   ├── main.py                # ZMQ server startup
+│   ├── library_service.py     # ZMQ service (REP socket)
+│   └── db.py                  # Data access (DB.json)
 ├── client/
 │   ├── __init__.py
-│   ├── app.py                 # App Flask
-│   ├── grpc_client.py         # Cliente ZMQ (REQ socket)
+│   ├── app.py                 # Flask app
+│   ├── grpc_client.py         # ZMQ client (REQ socket)
 │   ├── templates/
 │   │   ├── base.html
 │   │   ├── index.html
@@ -154,11 +154,11 @@ RMI-Workshop/
 │       └── style.css
 ```
 
-## Tecnologías
+## Technologies
 
-- **ZeroMQ (pyzmq)** — Comunicación cliente-servidor (patrón REQ-REP)
-- **Flask** — Framework web del lado del cliente
-- **HTMX** — Interactividad sin JavaScript manual
-- **JSON** — Persistencia de datos y protocolo de mensajes
+- **ZeroMQ (pyzmq)** — Client-server communication (REQ-REP pattern)
+- **Flask** — Client-side web framework
+- **HTMX** — Interactivity without manual JavaScript
+- **JSON** — Data persistence and message protocol
 
 

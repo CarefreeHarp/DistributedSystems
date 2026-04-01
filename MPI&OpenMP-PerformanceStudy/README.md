@@ -1,115 +1,115 @@
-# MPI&OpenMP-PerformanceStudy — Estudio de Rendimiento Híbrido MPI + OpenMP
+# MPI&OpenMP-PerformanceStudy — Hybrid MPI + OpenMP Performance Study
 
-Estudio de rendimiento de multiplicación de matrices cuadradas implementado en **C con MPI y OpenMP**, comparando el algoritmo **clásico (Filas × Columnas)** contra la **variante con transposición (Filas × Transpuesta)**. Ejecutado sobre un clúster de 4 nodos con automatización de benchmarks.
+A square matrix multiplication performance study implemented in **C with MPI and OpenMP**, comparing the **classical algorithm (Rows × Columns)** against the **transposed variant (Rows × Transposed)**. Executed on a 4-node cluster with benchmark automation.
 
-## Arquitectura
+## Architecture
 
 ```mermaid
 graph TD
-    subgraph Cluster["🖧 Clúster de 4 Nodos"]
-        Master["💻 Master\n(rank 0, no computa)"]
-        subgraph W1["Nodo 0 — Worker"]
-            P1["Proceso MPI"]
-            T1a["Hilo 1"] 
-            T1b["Hilo 2"]
-            T1c["Hilo n"]
+    subgraph Cluster["🖧 4-Node Cluster"]
+        Master["💻 Master\n(rank 0, does not compute)"]
+        subgraph W1["Node 0 — Worker"]
+            P1["MPI Process"]
+            T1a["Thread 1"] 
+            T1b["Thread 2"]
+            T1c["Thread n"]
             P1 --> T1a & T1b & T1c
         end
-        subgraph W2["Nodo 1 — Worker"]
-            P2["Proceso MPI"]
-            T2a["Hilos\nOpenMP"]
+        subgraph W2["Node 1 — Worker"]
+            P2["MPI Process"]
+            T2a["OpenMP\nThreads"]
             P2 --> T2a
         end
-        subgraph W3["Nodo 2 — Worker"]
-            P3["Proceso MPI"]
-            T3a["Hilos\nOpenMP"]
+        subgraph W3["Node 2 — Worker"]
+            P3["MPI Process"]
+            T3a["OpenMP\nThreads"]
             P3 --> T3a
         end
     end
 
-    Master -->|"MPI_Bcast (B)\nMPI_Send (tajada A)"| W1
-    Master -->|"MPI_Bcast (B)\nMPI_Send (tajada A)"| W2
-    Master -->|"MPI_Bcast (B)\nMPI_Send (tajada A)"| W3
-    W1 -->|"MPI_Send\n(resultado)"| Master
-    W2 -->|"MPI_Send\n(resultado)"| Master
-    W3 -->|"MPI_Send\n(resultado)"| Master
+    Master -->|"MPI_Bcast (B)\nMPI_Send (slice of A)"| W1
+    Master -->|"MPI_Bcast (B)\nMPI_Send (slice of A)"| W2
+    Master -->|"MPI_Bcast (B)\nMPI_Send (slice of A)"| W3
+    W1 -->|"MPI_Send\n(result)"| Master
+    W2 -->|"MPI_Send\n(result)"| Master
+    W3 -->|"MPI_Send\n(result)"| Master
 ```
 
-## Dos estrategias de multiplicación
+## Two Multiplication Strategies
 
 ```mermaid
 graph LR
-    subgraph FxC["Clásica (Filas × Columnas)"]
-        A1["Fila de A"] --> Dot1["·"]
-        B1["Columna de B\n(stride +N)"] --> Dot1
+    subgraph FxC["Classical (Rows × Columns)"]
+        A1["Row of A"] --> Dot1["·"]
+        B1["Column of B\n(stride +N)"] --> Dot1
         Dot1 --> C1["C[i][j]"]
     end
-    subgraph FxT["Transpuesta (Filas × Filas)"]
-        A2["Fila de A"] --> Dot2["·"]
-        BT["Fila de B^T\n(stride +1)"] --> Dot2
+    subgraph FxT["Transposed (Rows × Rows)"]
+        A2["Row of A"] --> Dot2["·"]
+        BT["Row of B^T\n(stride +1)"] --> Dot2
         Dot2 --> C2["C[i][j]"]
     end
 ```
 
-| Algoritmo | Archivo | Acceso a B | Cache-friendly |
+| Algorithm | File | Access to B | Cache-friendly |
 |-----------|---------|-----------|:--------------:|
-| Clásico (FxC) | `mxmOmpMPIfxc.c` | Columnas (stride N) | ✗ |
-| Transpuesta (FxT) | `mxmOmpMPIfxt.c` | Filas (stride 1) | ✓ |
+| Classical (FxC) | `mxmOmpMPIfxc.c` | Columns (stride N) | ✗ |
+| Transposed (FxT) | `mxmOmpMPIfxt.c` | Rows (stride 1) | ✓ |
 
-La variante transpuesta convierte `B` en `B^T` antes de multiplicar, de modo que ambos operandos se recorren por filas (acceso secuencial en memoria), aprovechando mejor la caché.
+The transposed variant converts `B` into `B^T` before multiplication, so both operands are traversed by rows (sequential memory access), making better use of the cache.
 
-## Flujo de ejecución
+## Execution Flow
 
 ```mermaid
 sequenceDiagram
     participant M as Master (rank 0)
     participant W as Workers (rank 1..n)
 
-    M->>M: Inicializa A y B (N×N)
-    M->>M: Calcula tajada tW = N / workers
+    M->>M: Initializes A and B (N×N)
+    M->>M: Computes slice tW = N / workers
     M->>W: MPI_Bcast → N, tW
-    M->>W: MPI_Bcast → matriz B completa
-    M->>W: MPI_Send → tajada de A (tW filas)
-    W->>W: OpenMP paralleliza FxC o FxT
-    W->>M: MPI_Send → resultado parcial
-    M->>M: Mide tiempo (gettimeofday, µs)
+    M->>W: MPI_Bcast → full matrix B
+    M->>W: MPI_Send → slice of A (tW rows)
+    W->>W: OpenMP parallelizes FxC or FxT
+    W->>M: MPI_Send → partial result
+    M->>M: Measures time (gettimeofday, µs)
 ```
 
-## Diseño experimental
+## Experimental Design
 
-El script `lanzadorMPI.pl` ejecuta **tres casos experimentales**, cada uno con **30 repeticiones** por configuración:
+The `lanzadorMPI.pl` script runs **three experimental cases**, each with **30 repetitions** per configuration:
 
-### Caso 1 — Variación de procesos MPI
+### Case 1 — MPI Process Variation
 
-| Parámetro | Valores |
+| Parameter | Values |
 |-----------|---------|
-| np (procesos) | 5, 17, 33 |
-| Hilos OpenMP | 1 (fijo) |
-| Hostfile | `procesosHostfile` (múltiples slots/nodo) |
-| Tamaños N | 400, 800, 1600, 3200 |
+| np (processes) | 5, 17, 33 |
+| OpenMP threads | 1 (fixed) |
+| Hostfile | `procesosHostfile` (multiple slots/node) |
+| Sizes N | 400, 800, 1600, 3200 |
 
-### Caso 2 — Variación de hilos OpenMP
+### Case 2 — OpenMP Thread Variation
 
-| Parámetro | Valores |
+| Parameter | Values |
 |-----------|---------|
-| np (procesos) | 5 (fijo, 1/nodo) |
-| Hilos OpenMP | 1, 4, 8 |
-| Hostfile | `hilosHostFile` (1 slot/nodo) |
-| Tamaños N | 400, 800, 1600, 3200 |
+| np (processes) | 5 (fixed, 1/node) |
+| OpenMP threads | 1, 4, 8 |
+| Hostfile | `hilosHostFile` (1 slot/node) |
+| Sizes N | 400, 800, 1600, 3200 |
 
-### Caso 3 — Línea base (solo Master)
+### Case 3 — Baseline (Master only)
 
-| Parámetro | Valores |
+| Parameter | Values |
 |-----------|---------|
-| np (procesos) | 2 (master + 1 worker, mismo nodo) |
-| Hilos OpenMP | 1 |
-| Tamaños N | 400, 800, 1600, 3200 |
+| np (processes) | 2 (master + 1 worker, same node) |
+| OpenMP threads | 1 |
+| Sizes N | 400, 800, 1600, 3200 |
 
-> El caso 3 sirve como referencia para calcular **speedup** y **eficiencia**.
+> Case 3 serves as the reference for calculating **speedup** and **efficiency**.
 
 ## Hostfiles
 
-### `procesosHostfile` — Distribución por procesos
+### `procesosHostfile` — Distribution by Processes
 ```
 master  slots=9
 nodo0   slots=8
@@ -117,7 +117,7 @@ nodo1   slots=8
 nodo2   slots=8
 ```
 
-### `hilosHostFile` — Distribución por hilos
+### `hilosHostFile` — Distribution by Threads
 ```
 master  slots=2
 nodo0   slots=1
@@ -125,73 +125,73 @@ nodo1   slots=1
 nodo2   slots=1
 ```
 
-## Requisitos
+## Requirements
 
 - **OpenMPI** (`mpicc`, `mpirun`)
-- **GCC** con soporte **OpenMP** (`-fopenmp`)
-- **Perl** (para el script de benchmarking)
-- Configuración SSH sin contraseña entre nodos del clúster
+- **GCC** with **OpenMP** support (`-fopenmp`)
+- **Perl** (for the benchmarking script)
+- Passwordless SSH configuration between cluster nodes
 
-## Compilación
+## Compilation
 
 ```bash
 cd evalMxM_MPI
 make
 ```
 
-Esto genera dos ejecutables:
-- `mxmOmpMPIfxc` — Algoritmo clásico (Filas × Columnas)
-- `mxmOmpMPIfxt` — Algoritmo transpuesta (Filas × Transpuesta)
+This generates two executables:
+- `mxmOmpMPIfxc` — Classical algorithm (Rows × Columns)
+- `mxmOmpMPIfxt` — Transposed algorithm (Rows × Transposed)
 
-Para limpiar:
+To clean:
 ```bash
 make clean
 ```
 
-## Ejecución
+## Execution
 
-### Ejecución manual (ejemplo)
+### Manual Execution (example)
 
 ```bash
-# Clásico: 5 procesos, matrices 800×800, 4 hilos OpenMP
+# Classical: 5 processes, 800×800 matrices, 4 OpenMP threads
 mpirun -hostfile procesosHostfile -np 5 --map-by node ./mxmOmpMPIfxc 800 4
 
-# Transpuesta: misma configuración
+# Transposed: same configuration
 mpirun -hostfile procesosHostfile -np 5 --map-by node ./mxmOmpMPIfxt 800 4
 ```
 
-### Benchmark automatizado (todos los casos)
+### Automated Benchmark (all cases)
 
 ```bash
 perl lanzadorMPI.pl
 ```
 
-Genera archivos `.dat` en `resultadosDAT/` con los tiempos en microsegundos. Ejemplos de nombres:
+It generates `.dat` files in `resultadosDAT/` with times in microseconds. Example names:
 - `Procesos-Pr-clasica-N-800-NP-17.dat`
 - `Hilos-Pr-transpuesta-N-1600-NP-5-H-8.dat`
 - `ProcesosMaster-Pr-clasica-N-3200-NP-2.dat`
 
-## Estructura del proyecto
+## Project Structure
 
 ```
 MPI&OpenMP-PerformanceStudy/
 ├── README.md
 └── evalMxM_MPI/
-    ├── Makefile                    # Compilación de ambos ejecutables
-    ├── moduloMPI.h                 # Prototipos de funciones auxiliares
-    ├── moduloMPI.c                 # Módulo compartido (init, FxC, FxT, tiempo)
-    ├── mxmOmpMPIfxc.c              # Main — Multiplicación clásica (FxC)
-    ├── mxmOmpMPIfxt.c              # Main — Multiplicación transpuesta (FxT)
-    ├── lanzadorMPI.pl              # Script Perl de automatización
-    ├── procesosHostfile            # Hostfile: múltiples slots por nodo
-    ├── hilosHostFile               # Hostfile: 1 slot por nodo (hilos)
-    └── resultadosDAT/              # Archivos .dat con tiempos (µs)
+    ├── Makefile                    # Compilation of both executables
+    ├── moduloMPI.h                 # Auxiliary function prototypes
+    ├── moduloMPI.c                 # Shared module (init, FxC, FxT, timing)
+    ├── mxmOmpMPIfxc.c              # Main — Classical multiplication (FxC)
+    ├── mxmOmpMPIfxt.c              # Main — Transposed multiplication (FxT)
+    ├── lanzadorMPI.pl              # Perl automation script
+    ├── procesosHostfile            # Hostfile: multiple slots per node
+    ├── hilosHostFile               # Hostfile: 1 slot per node (threads)
+    └── resultadosDAT/              # .dat files with times (µs)
 ```
 
-## Tecnologías
+## Technologies
 
-- **C** — Lenguaje de implementación
-- **MPI (OpenMPI)** — Comunicación distribuida entre nodos (Send/Recv, Bcast)
-- **OpenMP** — Paralelismo intra-nodo (hilos sobre las tajadas)
-- **Perl** — Automatización del experimento completo
-- **gettimeofday()** — Medición de tiempo en microsegundos
+- **C** — Implementation language
+- **MPI (OpenMPI)** — Distributed communication between nodes (Send/Recv, Bcast)
+- **OpenMP** — Intra-node parallelism (threads over the slices)
+- **Perl** — Full experiment automation
+- **gettimeofday()** — Time measurement in microseconds
