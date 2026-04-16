@@ -36,16 +36,25 @@ graph TB
         Hybrid --- Bench
     end
 
+    subgraph P4["SmartSemaphoreManagement"]
+        direction LR
+        ZMQ2["Python + ZeroMQ"]
+        Traffic["Traffic Sim + Failover"]
+        ZMQ2 --- Traffic
+    end
+
     Repo --> P1
     Repo --> P2
     Repo --> P3
+    Repo --> P4
 ```
 
-At a high level, the repository includes three main lines of work:
+At a high level, the repository includes four main lines of work:
 
 - **Distributed matrix multiplication with MPI**, executed in a small cluster environment
 - **A distributed library system with ZeroMQ**, exposed through a lightweight web interface
 - **A hybrid MPI + OpenMP performance study**, focused on comparing parallelization strategies
+- **A smart semaphore management platform**, combining simulation, analytics, replication, and failover
 
 This means the repository covers topics related to:
 
@@ -53,6 +62,7 @@ This means the repository covers topics related to:
 - Parallel Programming
 - High Performance Computing
 - Experimental performance evaluation (Benchmarks)
+- Event-driven architectures, replication, and service continuity
 
 ---
 
@@ -148,6 +158,37 @@ graph LR
 
 ---
 
+### 4. SmartSemaphoreManagement
+
+Distributed smart traffic control system implemented in **Python using ZeroMQ and SQLite**, combining **traffic simulation, logical sensors, semaphore analytics, operational replication, and failover support** across four logical computers (`PC0` to `PC3`).
+
+```mermaid
+graph LR
+    PC0["PC0\nSimulation + Historic DB"] -->|"Operational snapshots"| PC1["PC1\nSensors + Broker"]
+    PC1 -->|"Sensor events"| PC2["PC2\nAnalytics + Replica + Backup Backend"]
+    PC2 -->|"Semaphore commands"| PC0
+    PC0 -->|"Operational state"| PC3["PC3\nMain DB + Primary Backend"]
+    PC3 -->|"Manual control"| PC2
+    PC3 -->|"Ambulance requests"| PC0
+```
+
+**Core deployment roles:**
+
+| PC | Main responsibility |
+|------|----------------------|
+| `PC0` | Authoritative traffic simulation and historical persistence |
+| `PC1` | Logical sensors and ZeroMQ broker |
+| `PC2` | Traffic analytics, semaphore control, operational replica, and backup backend |
+| `PC3` | Main database, monitoring, and primary backend |
+
+  - Camera, inductive-loop, and GPS logical sensors over instrumented roads  
+  - Score-based traffic control with one decision per intersection and simulation tick  
+  - ZeroMQ-based communication with fully configurable endpoints  
+  - Operational replication in `PC2` to keep the system available if `PC3` fails  
+  - **[Full README](SmartSemaphoreManagement/README.md)** with design decisions, architecture, and execution details
+
+---
+
 ## Technologies Used
 
 Across the different subprojects:
@@ -156,7 +197,7 @@ Across the different subprojects:
 - **Python**
 - **ZeroMQ**
 - **Flask + HTMX**
-- **JSON / CSV for data handling**
+- **SQLite / JSON / CSV for data handling**
 - **Perl scripts for automated benchmarking**
 - **Linux-based cluster environments**
 
