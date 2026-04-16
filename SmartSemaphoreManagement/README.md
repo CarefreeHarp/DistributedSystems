@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Integrantes** | Integrante 1, Integrante 2, Integrante 3, Integrante 4, Integrante 5 |
+| **Integrantes** | Daniel Felipe Ramirez Vargas<br>Ana Sofia Arboleda<br>Samuel Pico<br>Guillermo Andrés Aponte Cárdenas |
 | **Docente** | John Jairo Corredor |
 | **Fecha** | 4 de abril de 2026 |
 
