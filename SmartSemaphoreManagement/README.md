@@ -14,6 +14,20 @@
 
 ---
 
+**Vista general de la arquitectura distribuida:**
+
+```mermaid
+graph LR
+    PC0["PC0\nSimulation + Historic DB"] -->|"Operational snapshots"| PC1["PC1\nSensors + Broker"]
+    PC1 -->|"Sensor events"| PC2["PC2\nAnalytics + Replica + Backup Backend"]
+    PC2 -->|"Semaphore commands"| PC0
+    PC0 -->|"Operational state"| PC3["PC3\nMain DB + Primary Backend"]
+    PC3 -->|"Manual control"| PC2
+    PC3 -->|"Ambulance requests"| PC0
+```
+
+---
+
 ## Índice
 
 1. [Resumen del Diseño Acordado](#1-resumen-del-diseño-acordado)
