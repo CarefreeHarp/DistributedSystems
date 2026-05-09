@@ -1,11 +1,11 @@
-# Distributed Systems & Initial Studies for High Performance Computing
+# Distributed Systems, Storage, and High Performance Computing Studies
 
-This repository contains the projects developed related to Distributed Systems, High Performance Computing (HPC), and Parallel Programming.
+This repository contains projects related to Distributed Systems, distributed storage, High Performance Computing (HPC), and Parallel Programming.
 
 Each directory corresponds to a subproject with its own implementation, experiments, and documentation.  
 Please see below the structure and description of each directory.
 
-The repository combines both **implementation-oriented workshops** and **performance-focused experimental studies**.
+The repository combines **implementation-oriented workshops**, **infrastructure deployment guides**, and **performance-focused experimental studies**.
 
 ---
 
@@ -43,22 +43,32 @@ graph TB
         ZMQ2 --- Traffic
     end
 
+    subgraph P5["HDFS"]
+        direction LR
+        Hadoop["Hadoop HDFS"]
+        Yarn["YARN on LAN"]
+        Hadoop --- Yarn
+    end
+
     Repo --> P1
     Repo --> P2
     Repo --> P3
     Repo --> P4
+    Repo --> P5
 ```
 
-At a high level, the repository includes four main lines of work:
+At a high level, the repository includes five main lines of work:
 
 - **Distributed matrix multiplication with MPI**, executed in a small cluster environment
 - **A distributed library system with ZeroMQ**, exposed through a lightweight web interface
 - **A hybrid MPI + OpenMP performance study**, focused on comparing parallelization strategies
 - **A smart semaphore management platform**, combining simulation, analytics, replication, and failover
+- **A Hadoop HDFS deployment guide**, focused on distributed storage and YARN in a heterogeneous LAN
 
 This means the repository covers topics related to:
 
 - Distributed Systems
+- Distributed storage and Hadoop-based cluster deployment
 - Parallel Programming
 - High Performance Computing
 - Experimental performance evaluation (Benchmarks)
@@ -189,6 +199,34 @@ graph LR
 
 ---
 
+### 5. HDFS
+
+Hadoop distributed storage deployment guide centered on **HDFS and YARN** over a **heterogeneous LAN cluster** with **Ubuntu and Rocky Linux**.  
+This subproject is documentation-oriented and summarizes the concepts, setup flow, validation process, and common operational issues found during the laboratory deployment.
+
+```mermaid
+graph LR
+    User["💻 CLI User"] -->|"hdfs dfs / yarn"| Master["🧠 NameNode + ResourceManager"]
+    Master -->|"metadata + scheduling"| U1["🖥️ Ubuntu Node\nDataNode + NodeManager"]
+    Master -->|"metadata + scheduling"| U2["🖥️ Ubuntu Node\nDataNode + NodeManager"]
+    Master -->|"metadata + scheduling"| R1["🖥️ Rocky Linux Node\nDataNode + NodeManager"]
+```
+
+**Mini validation sample:**
+
+| Check | Observed result |
+|------|------------------|
+| NameNode UI | Active |
+| Live nodes | 5 |
+| Under-replicated blocks | 0 |
+
+  - HDFS concepts: NameNode, DataNodes, block replication, and fault tolerance  
+  - Heterogeneous LAN setup with shared hostnames, SSH, Java, and Hadoop configuration  
+  - Validation through uploads, downloads, replica inspection, and basic failure checks  
+  - **[Full README](HDFS/README.md)** with workflow, command examples, and the complete report link
+
+---
+
 ## Technologies Used
 
 Across the different subprojects:
@@ -197,9 +235,11 @@ Across the different subprojects:
 - **Python**
 - **ZeroMQ**
 - **Flask + HTMX**
+- **Apache Hadoop (HDFS / YARN)**
+- **Java**
 - **SQLite / JSON / CSV for data handling**
 - **Perl scripts for automated benchmarking**
-- **Linux-based cluster environments**
+- **SSH and Linux-based cluster environments**
 
 ---
 
@@ -211,6 +251,9 @@ Depending on the subproject, the main tools required are:
 - **OpenMP-compatible C compiler**
 - **Python 3.10+**
 - **pip** for Python dependencies
+- **Java runtime compatible with Hadoop**
+- **Apache Hadoop / HDFS / YARN**
+- **SSH connectivity** for multi-node execution
 
 Some experiments were designed for multi-node or multi-machine execution, so hostfile-based setups and Linux environments are assumed in several directories.
 
