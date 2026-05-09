@@ -1,17 +1,29 @@
 # HDFS — Hadoop Distributed File System LAN Deployment Guide
 
-A documentation-oriented subproject focused on deploying **Apache Hadoop HDFS and YARN** on a **heterogeneous LAN cluster** using **Ubuntu and Rocky Linux**. The complete report is available in [HDFS-LAN-Implementation-Guide-Ubuntu-RockyLinux.pdf](HDFS-LAN-Implementation-Guide-Ubuntu-RockyLinux.pdf).
+A documentation-oriented subproject focused on deploying **Apache Hadoop HDFS and YARN** on a **5-machine heterogeneous LAN cluster** using **Ubuntu and Rocky Linux**. The master machine runs both **NameNode + ResourceManager** and **DataNode + NodeManager**, while the remaining four machines contribute distributed storage and execution capacity. The complete report is available in [HDFS-LAN-Implementation-Guide-Ubuntu-RockyLinux.pdf](HDFS-LAN-Implementation-Guide-Ubuntu-RockyLinux.pdf).
 
 ## Architecture
 
 ```mermaid
-graph LR
-    User["💻 CLI User"] -->|"hdfs dfs / yarn"| Master["🧠 NameNode + ResourceManager"]
-    Master -->|"metadata + scheduling"| U1["🖥️ Ubuntu Node\nDataNode + NodeManager"]
-    Master -->|"metadata + scheduling"| U2["🖥️ Ubuntu Node\nDataNode + NodeManager"]
-    Master -->|"metadata + scheduling"| R1["🖥️ Rocky Linux Node\nDataNode + NodeManager"]
-    U1 <-->|block replication| U2
-    U2 <-->|block replication| R1
+graph TD
+    User["💻 CLI User"]
+
+    subgraph Cluster["🖧 5-Machine LAN Cluster"]
+        Master["🧠 Ubuntu Master\nNameNode + ResourceManager\nDataNode + NodeManager"]
+        U1["🖥️ Ubuntu Worker 1\nDataNode + NodeManager"]
+        U2["🖥️ Ubuntu Worker 2\nDataNode + NodeManager"]
+        U3["🖥️ Ubuntu Worker 3\nDataNode + NodeManager"]
+        R1["🖥️ Rocky Linux Worker\nDataNode + NodeManager"]
+    end
+
+    User -->|"hdfs dfs / yarn"| Master
+    Master -.->|"metadata + scheduling"| U1
+    Master -.->|"metadata + scheduling"| U2
+    Master -.->|"metadata + scheduling"| U3
+    Master -.->|"metadata + scheduling"| R1
+    U1 <-->|replicated blocks| U2
+    U2 <-->|replicated blocks| U3
+    U3 <-->|replicated blocks| R1
 ```
 
 ## Document Scope
@@ -30,18 +42,25 @@ graph LR
 ```mermaid
 sequenceDiagram
     participant Admin as Cluster Admin
-    participant Master as NameNode
-    participant Workers as DataNodes
+    participant Master as Ubuntu Master
+    participant UbuntuWorkers as 3 Ubuntu Workers
+    participant RockyWorker as Rocky Linux Worker
+
+    Note over Master: NameNode + ResourceManager + DataNode + NodeManager
+    Note over UbuntuWorkers: DataNode + NodeManager
+    Note over RockyWorker: DataNode + NodeManager
 
     Admin->>Master: Define hostnames and shared name resolution
-    Admin->>Master: Install Java and Hadoop
-    Admin->>Workers: Copy Hadoop and create shared user
-    Master->>Workers: Configure passwordless SSH
-    Admin->>Master: Set core-site.xml and hdfs-site.xml
-    Admin->>Master: Set workers, YARN, and MapReduce files
-    Master->>Master: Format HDFS
-    Master->>Workers: Start HDFS and YARN services
-    Admin->>Master: Validate uploads, replicas, and node health
+    Admin->>UbuntuWorkers: Install Java, Hadoop, and the shared user
+    Admin->>RockyWorker: Install Java, Hadoop, and the shared user
+    Master->>UbuntuWorkers: Distribute Hadoop and shared configuration
+    Master->>RockyWorker: Distribute Hadoop and shared configuration
+    Admin->>Master: Set core-site.xml, hdfs-site.xml, workers, and YARN files
+    Master->>Master: Format HDFS on the master node
+    Master->>Master: Start NameNode, ResourceManager, DataNode, and NodeManager
+    Master->>UbuntuWorkers: Start DataNode and NodeManager
+    Master->>RockyWorker: Start DataNode and NodeManager
+    Admin->>Master: Validate 5 live nodes, replicas, and YARN status
 ```
 
 ## Representative Operational Commands

@@ -201,15 +201,16 @@ graph LR
 
 ### 5. HDFS
 
-Hadoop distributed storage deployment guide centered on **HDFS and YARN** over a **heterogeneous LAN cluster** with **Ubuntu and Rocky Linux**.  
-This subproject is documentation-oriented and summarizes the concepts, setup flow, validation process, and common operational issues found during the laboratory deployment.
+Hadoop distributed storage deployment guide centered on **HDFS and YARN** over a **5-machine heterogeneous LAN cluster** with **Ubuntu and Rocky Linux**.  
+In this setup, the master node acts as both **NameNode** and **DataNode**, while the other four machines expand storage and execution capacity.
 
 ```mermaid
 graph LR
-    User["💻 CLI User"] -->|"hdfs dfs / yarn"| Master["🧠 NameNode + ResourceManager"]
-    Master -->|"metadata + scheduling"| U1["🖥️ Ubuntu Node\nDataNode + NodeManager"]
-    Master -->|"metadata + scheduling"| U2["🖥️ Ubuntu Node\nDataNode + NodeManager"]
-    Master -->|"metadata + scheduling"| R1["🖥️ Rocky Linux Node\nDataNode + NodeManager"]
+    User["💻 CLI User"] -->|"hdfs dfs / yarn"| Master["🧠 Ubuntu Master\nNameNode + ResourceManager\nDataNode + NodeManager"]
+    Master -->|"metadata + scheduling"| U1["🖥️ Ubuntu Worker 1\nDataNode + NodeManager"]
+    Master -->|"metadata + scheduling"| U2["🖥️ Ubuntu Worker 2\nDataNode + NodeManager"]
+    Master -->|"metadata + scheduling"| U3["🖥️ Ubuntu Worker 3\nDataNode + NodeManager"]
+    Master -->|"metadata + scheduling"| R1["🖥️ Rocky Linux Worker\nDataNode + NodeManager"]
 ```
 
 **Mini validation sample:**
