@@ -1,20 +1,25 @@
-# Decisiones de Diseño
-## Gestión Inteligente de Tráfico Urbano
+# Smart Semaphore Management
 
-**Pontificia Universidad Javeriana**  
-**Facultad de Ingeniería**  
-**Departamento de Ingeniería de Sistemas**  
-**Introducción a Sistemas Distribuidos**
+Distributed traffic simulation and smart traffic-light management system for the Distributed Systems course at Pontificia Universidad Javeriana.
 
 | | |
 |---|---|
-| **Integrantes** | Daniel Felipe Ramirez Vargas<br>Ana Sofia Arboleda<br>Samuel Pico<br>Guillermo Andrés Aponte Cárdenas |
-| **Docente** | John Jairo Corredor |
-| **Fecha** | 4 de abril de 2026 |
+| Team | Daniel Felipe Ramirez Vargas<br>Ana Sofia Arboleda<br>Samuel Pico<br>Guillermo Andres Aponte Cardenas |
+| Course | Introduction to Distributed Systems |
+| Date | April 2026 |
 
----
+## Overview
 
-**Vista general de la arquitectura distribuida:**
+The project models an urban traffic network as a directed graph over a configurable grid. Vehicles enter through border nodes, move through one-way roads, wait at red lights, and leave the system through exit nodes.
+
+The system is split across four logical computers:
+
+- `PC0`: authoritative simulation, vehicle generation, ambulance injection, and historical database.
+- `PC1`: simulated sensors and ZeroMQ broker.
+- `PC2`: analytics, automatic traffic-light decisions, current-state replica, and backup backend.
+- `PC3`: main database, primary backend, manual controls, ambulance requests, and web frontend.
+
+Distributed communication is handled with ZeroMQ. Runtime parameters and all network endpoints are centralized in `config/system_config.json`.
 
 ```mermaid
 graph LR
@@ -26,610 +31,98 @@ graph LR
     PC3 -->|"Ambulance requests"| PC0
 ```
 
----
-
-## Índice
-
-1. [Resumen del Diseño Acordado](#1-resumen-del-diseño-acordado)
-2. [Decisiones Base del Proyecto](#2-decisiones-base-del-proyecto)
-3. [Modelo de la Ciudad](#3-modelo-de-la-ciudad)
-4. [Sensores y Estado del Tráfico](#4-sensores-y-estado-del-tráfico)
-5. [Lógica de Analítica y Semáforos](#5-lógica-de-analítica-y-semáforos)
-6. [Vehículos y Simulación](#6-vehículos-y-simulación)
-7. [Distribución por Computadores](#7-distribución-por-computadores)
-8. [Persistencia y Tiempo de Simulación](#8-persistencia-y-tiempo-de-simulación)
-9. [Interacción entre Componentes](#9-interacción-entre-componentes)
-10. [Inicialización del Sistema](#10-inicialización-del-sistema)
-11. [Ejecución del Workspace](#11-ejecución-del-workspace)
-12. [Fallos y Continuidad Operativa](#12-fallos-y-continuidad-operativa)
-13. [Comparación de Rendimiento del Broker](#13-comparación-de-rendimiento-del-broker)
-
----
-
-## 1. Resumen del Diseño Acordado
-
-El sistema se organiza sobre cuatro computadores (**PC0**, **PC1**, **PC2** y **PC3**) que se comunican con ZeroMQ. La ciudad se representa como una cuadrícula N×M, pero internamente se maneja como un **grafo dirigido** donde las intersecciones son nodos y las vías son aristas con datos de tráfico. Sobre las aristas o accesos de entrada se ubican sensores lógicos de tipo cámara, espira inductiva y GPS. Sus eventos alimentan un *score* por vía de entrada antes del semáforo, y ese valor se usa para decidir cuál conflicto del cruce debe recibir prioridad. Un reloj global de simulación (12:00 a 18:00) da la referencia temporal de todos los eventos.
-
-- **PC1** aloja los sensores y el broker ZeroMQ.
-- **PC2** ejecuta la analítica, el control semafórico y la réplica de la base de datos.
-- **PC3** ofrece monitoreo, consulta, visualización, base de datos principal y control manual.
-- **PC0** (extensión del grupo de computadores) genera los vehículos simulados y guarda el histórico del día; no reemplaza a otro computador en caso de falla.
-
-La estrategia de resiliencia se enfoca en la caída de PC3, usando la réplica de PC2 para que el sistema siga funcionando. También se plantea un experimento de rendimiento para comparar una versión base del broker con otra mejorada con hilos.
-
-Todo el diseño es **parametrizable**: el tamaño de la cuadrícula, las intersecciones activas, las frecuencias de sensores, los pesos de la analítica, los tiempos semafóricos y las reglas de tráfico se definen en archivos de configuración compartidos.
-
----
-
-## 2. Decisiones Base del Proyecto
-
-### 2.1. Supuestos Generales
-
-- Se asume exactamente un sensor lógico de cada tipo (cámara, espira inductiva y GPS) por cada arista o acceso observado en el sistema.
-- Todas las vías son de **sentido único**.
-- El cambio de semáforo ocurre únicamente entre **verde y rojo**, sin fase amarilla.
-- Todo el sistema se diseña de forma parametrizada, de modo que la escala pueda aumentarse o reducirse sin modificar la lógica central.
-- La cantidad total de sensores se deriva de las aristas o accesos observados: si hay *k* aristas instrumentadas, existirán **3k sensores lógicos**.
-
-### 2.2. Parámetros Configurables
-
-Los siguientes parámetros deben poder ajustarse con archivos de configuración, sin recompilar el sistema:
-
-- Tamaño de la cuadrícula de la ciudad (N×M).
-- Conjunto de intersecciones activas dentro de la cuadrícula.
-- Frecuencia de generación de eventos por tipo de sensor.
-- Endpoints de comunicación ZeroMQ (IP o hostname y puerto) para permitir tanto ejecución local como despliegue en múltiples PCs.
-- Tiempos base de alternancia semafórica (por defecto, **15 segundos** en condiciones normales).
-- Reglas y umbrales que definen los estados de tráfico (normal, congestión, priorización).
-- Pesos de ponderación de cada sensor para el cálculo del score.
-- Parámetros del reloj de simulación (hora de inicio, hora de fin, factor de aceleración).
-- Parámetros de generación de vehículos en PC0 (tasa de ingreso, velocidades, etc.).
-
-#### Convención de Documentación del Archivo de Configuración
-
-El archivo principal de configuración es `config/system_config.json`. Como el proyecto lo carga con `json.load`, no es posible usar comentarios nativos tipo `//` o `/* ... */` sin romper el parseo. Por esa razón, se adopta una convención explícita: agregar claves `_comentario` o `_comentarios` dentro del mismo JSON para explicar el propósito de cada bloque y de cada parámetro sin afectar la ejecución.
-
-En la implementación actual, ese archivo agrupa sus parámetros en cinco bloques:
-
-- `ciudad`: define la geometría de la cuadrícula, el rango de longitud de las vías y la semilla usada para construir el mapa reproducible.
-- `sensores`: define qué tipos de sensores están activos y con qué frecuencia publica `PC1` sus eventos derivados del snapshot.
-- `analitica`: define el umbral general de congestión y los pesos usados para combinar cámara, espira y GPS en el score por vía.
-- `simulacion`: define la duración del tick real, el tiempo simulado por tick, la frecuencia de envío de snapshots, la tasa de generación de vehículos, el máximo de vehículos por tick, el rango de velocidades iniciales y la velocidad por defecto de ambulancias.
-- `zmq`: define todos los endpoints de comunicación entre `PC0`, `PC1`, `PC2` y `PC3`, incluyendo ingestas de bases de datos, broker, snapshots, backend principal, backend de respaldo, control manual y solicitudes de ambulancia.
-
-Dentro del bloque `simulacion` también quedan parametrizadas de forma explícita `hora_inicio_simulada` y `hora_fin_simulada`, para que el reloj lógico del sistema no dependa solo de lo escrito en el informe sino de valores reales del archivo de configuración.
-
-Esta convención tiene dos ventajas para el informe final: el archivo sigue siendo ejecutable tal como está, y al mismo tiempo queda autoexplicado para cualquier integrante que necesite modificar parámetros sin rastrear el código fuente.
-
-### 2.3. Organización del Código Compartido
-
-El proyecto incluye un directorio compartido llamado `common`, cuyo propósito es centralizar el código que debe ser reutilizado por varios procesos distribuidos del sistema. Esta organización reduce duplicación, evita inconsistencias entre nodos y hace más claro el mantenimiento del proyecto.
-
-Dentro de `common` se distinguen tres responsabilidades:
-
-- `common/mensajes`: contiene los contratos de comunicación entre procesos. Aquí se definen las estructuras de eventos, comandos y solicitudes compartidas para que productores y consumidores manejen el mismo formato.
-- `common/modelos`: contiene las entidades del dominio y del mundo simulado, por ejemplo el grafo de la ciudad, las vías, las intersecciones, los vehículos y los resultados de simulación.
-- `common/utilidades`: contiene funciones auxiliares reutilizables que **no representan entidades del dominio**, pero son necesarias para operar el sistema de manera consistente.
-
-Es importante aclarar que ubicar una pieza en `common` **no significa** que cualquier computador tenga autoridad para ejecutar la acción asociada. `common` solo centraliza contratos, modelos y lógica reutilizable. La autoridad operativa sigue definida por la arquitectura: por ejemplo, `PC0` es el único dueño del mapa y de los vehículos, aunque la solicitud de ambulancia y la lógica compartida del backend vivan en código común.
-
-La carpeta `common/utilidades` se usa para centralizar tareas transversales como:
-
-- carga de configuración compartida,
-- generación de logs,
-- normalización de sensores,
-- y otros *helpers* reutilizables por múltiples computadores.
-
-Esta separación permite que la lógica principal del sistema quede en los modelos y en los procesos de cada PC, mientras que `common/utilidades` funciona como una caja de herramientas compartida que mantiene una única fuente de verdad para operaciones auxiliares repetidas.
-
-En la implementación actual, el contenido principal de `common` se entiende así:
-
-- `common/mensajes/eventos.py`: eventos de sensores emitidos por `PC1`, incluyendo la vía observada y el `tick_origen`.
-- `common/mensajes/comandos.py`: comandos semafóricos emitidos por `PC2` hacia `PC0`.
-- `common/mensajes/estado_operativo.py`: contrato del `snapshot_operativo` que representa la foto actual del sistema.
-- `common/mensajes/ambulancias.py`: solicitud compartida para crear ambulancias en `PC0`.
-- `common/modelos/trafico.py`: grafo de la ciudad, intersecciones, nodos de borde y vías.
-- `common/modelos/vehiculos.py`: entidades vehiculares del sistema.
-- `common/modelos/simulacion.py`: motor de simulación por ticks y reglas de movimiento.
-- `common/utilidades/configuracion.py`: carga y acceso a configuración compartida.
-- `common/utilidades/logs.py`: formato uniforme de logs.
-- `common/utilidades/normalizacion_sensores.py`: fórmulas y clasificación de sensores.
-- `common/utilidades/persistencia_sqlite.py`: persistencia compartida en SQLite.
-- `common/utilidades/mensajeria_zmq.py`: helpers ZeroMQ de mejor esfuerzo.
-
-### 2.4. Organización del Repositorio por Computador
-
-Además de `common`, el repositorio se organiza por el rol de cada computador:
-
-- `PC0/simulation`: simulación autoritativa del mapa, tick, vehículos y ambulancias.
-- `PC0/historic_db`: persistencia histórica amplia del día simulado.
-- `PC1/sensors`: sensores lógicos que leen snapshots y publican eventos.
-- `PC1/broker`: broker ZeroMQ base que reenvía eventos.
-- `PC2/analytics`: servicio de analítica y decisión semafórica por tick.
-- `PC2/traffic_ctrl`: envío de comandos semafóricos hacia `PC0`.
-- `PC2/replica_db`: réplica operativa y canal de resincronización para `PC3`.
-- `PC2/backend_respaldo`: backend de respaldo limitado a continuidad y consulta de estado actual cuando `PC3` no está disponible.
-- `PC3/main_db`: base principal y servicio de persistencia/resincronización.
-- `PC3/backend`: backend principal de consultas de estado, creación de ambulancias y control manual.
-- `PC3/frontend`: interfaz web local servida por el backend principal de `PC3`.
-
-Como criterio de mantenimiento del repositorio, se evita conservar directorios vacíos o de andamio que todavía no cumplen una función real en la implementación. Si en una fase posterior vuelve a ser necesario separar responsabilidades como generadores, variantes de broker o reloj explícito, esas carpetas pueden recrearse en ese momento para dejar un esqueleto del proyecto claro, limpio y alineado con el estado real del código.
-
----
-
-## 3. Modelo de la Ciudad
-
-### 3.1. Cuadrícula y Grafo Dirigido
-
-La ciudad se describe como una cuadrícula N×M (filas por letras y columnas por números). Internamente se modela como un **grafo dirigido** sobre esa cuadrícula: las intersecciones son nodos y las vías de sentido único son aristas dirigidas con atributos. Este modelo permite representar la dirección del flujo, la congestión y el estado de cada vía.
-
-En la visualización se puede mostrar información sobre las vías como si hubiera puntos intermedios, pero en la lógica del sistema cada vía sigue siendo una arista con atributos.
-
-### 3.2. Intersecciones
-
-Cada intersección es un nodo del grafo con los siguientes atributos:
-
-- **Identificador único:** por ejemplo `INT-C5` (fila C, columna 5).
-- **Coordenada** (fila, columna).
-- **Sensores relacionados:** las aristas o accesos conectados a la intersección cuentan con sensores lógicos de cámara, espira inductiva y GPS.
-- **Dos semáforos lógicos:** eje horizontal y eje vertical.
-- **Fase activa:** `HORIZONTAL` o `VERTICAL`; nunca hay dos fases en verde simultáneamente.
-
-### 3.3. Vías
-
-Cada vía se modela como una **arista dirigida** del grafo con los siguientes atributos. Como todas las vías son unidireccionales, cada arista representa un solo sentido de circulación:
-
-- Intersección origen.
-- Intersección destino (o nodo de salida destino).
-- Longitud o costo de la vía.
-- Dirección cardinal del movimiento (`NORTE`, `SUR`, `ESTE` u `OESTE`).
-- Vehículos en circulación dentro de la arista.
-- Vehículos en espera (detenidos por semáforo en rojo al final de la arista).
-- Velocidad promedio observada.
-- Score de congestión (valor normalizado en [0, 1]).
-- Estado de congestión derivado del score: tráfico normal, congestión o priorización.
-
-### 3.4. Nodos de Salida
-
-Los bordes de la cuadrícula se modelan mediante **nodos especiales de tipo Salida**, que permiten representar la entrada y salida de vehículos de la ciudad. Sus atributos son:
-
-- Identificador único.
-- Intersección del borde a la que está conectado.
-- Lado de salida: `NORTE`, `SUR`, `ESTE` u `OESTE`.
-
-Estos nodos habilitan el ingreso de vehículos generados por PC0 y el egreso cuando un vehículo llega al borde.
-
----
-
-## 4. Sensores y Estado del Tráfico
-
-### 4.1. Sensores por Arista
-
-Cada arista o acceso instrumentado cuenta con sensores lógicos de cada tipo: cámara, espira inductiva y GPS. Los sensores funcionan como **getters del estado de la arista**: consultan de forma periódica los atributos del tramo observado y procesan esos datos para producir las estadísticas y eventos que necesita la analítica. Como la vía tiene un único sentido, el sensor solo mide el flujo que viene en ese sentido hacia el semáforo.
-
-En la implementación, los eventos de sensores se emiten **por arista instrumentada**, no como un único resumen agregado por intersección completa. Por ello, cada evento identifica explícitamente la vía observada y la intersección destino asociada a esa vía.
-
-### 4.2. Cámara
-
-La cámara mide la acumulación o cola de vehículos y aporta una señal de ocupación inmediata. Sus datos salen de leer la cantidad de vehículos en espera al final de la arista o acceso observado (`EVENTO_LONGITUD_COLA`, **Lq**), es decir, los vehículos que ya completaron la longitud de la vía y se encuentran esperando paso antes de la intersección.
-
-La nota de prioridad aportada por la cámara se calcula como:
-
-$$n_c = \min\left(\frac{\text{vehículos en espera}}{10}, 1\right)$$
-
-Esto implica, por ejemplo:
-
-- 1 vehículo en espera → 0.1
-- 5 vehículos en espera → 0.5
-- 10 o más vehículos en espera → 1.0
-
-### 4.3. Espira Inductiva
-
-La espira inductiva mide la cantidad de vehículos que están en tránsito dentro de la arista antes de llegar a la intersección, y aporta una señal de presión de tráfico sobre la vía (`EVENTO_CONTEO_VEHICULAR`, **Cv**). En esta versión del diseño, la espira **no mide la cola** sino únicamente los vehículos que aún recorren la arista y no han llegado al punto de espera final.
-
-La nota de prioridad aportada por la espira se calcula como:
-
-$$n_e = \min\left(\frac{\text{vehículos en tránsito}}{10}, 1\right)$$
-
-Esto implica, por ejemplo:
-
-- 1 vehículo en tránsito → 0.1
-- 5 vehículos en tránsito → 0.5
-- 10 o más vehículos en tránsito → 1.0
-
-### 4.4. GPS
-
-El sensor GPS mide la velocidad promedio de los vehículos **en tránsito** en una arista y aporta una señal complementaria de fluidez o lentitud (`EVENTO_DENSIDAD_DE_TRAFICO`, **Dt**). El GPS **no se usa como criterio único** para cambiar semáforos, sino como un componente ponderado dentro del score total.
-
-El cálculo del GPS solo considera vehículos que se encuentran circulando actualmente por la arista. Si no hay vehículos en tránsito, el promedio de velocidad es 0 y la nota aportada por el GPS también es 0. Si sí hay vehículos en tránsito, el promedio siempre queda entre 10 y 50, porque cada vehículo mantiene una velocidad propia dentro de ese rango mientras circula.
-
-La nota del GPS se calcula por tramos así:
-
-- Si $$x = 0$$, entonces $$n_g = 0$$
-- Si $$10 \le x \le 50$$, entonces:
-
-$$n_g = 1 - 0.9 \cdot \frac{x - 10}{40}$$
-
-Con esta normalización:
-
-- 10 se mapea a 1.0
-- 50 se mapea a 0.1
-
-En otras palabras, a menor velocidad promedio de tránsito, mayor prioridad aporta el GPS.
-
-### 4.5. Relación entre Sensores y Aristas
-
-Los sensores simulados en PC1 están definidos sobre aristas o accesos y consultan el estado de los vehículos mantenido por PC0 para generar eventos realistas. Cada sensor actúa como un getter especializado del estado de una vía: toma atributos del tramo observado, los procesa según su tipo y publica la estadística resultante.
-
-Cada evento de sensor incluye también el identificador de la vía y el **tick de origen** de la simulación. Esto permite que PC2 agrupe lecturas consistentes del mismo instante lógico antes de calcular una decisión semafórica.
-
-### 4.6. Clasificación Cualitativa de Notas
-
-Las notas normalizadas de los sensores se interpretan también cualitativamente con la misma escala:
-
-- **Bajo:** $$0.0 \le x < 0.4$$
-- **Moderado:** $$0.4 \le x \le 0.7$$
-- **Intenso:** $$0.7 < x \le 1.0$$
-
----
-
-## 5. Lógica de Analítica y Semáforos
-
-### 5.1. Score por Vía
-
-La lógica de control semafórico se basa en una **calificación de estado (score)** para cada vía de entrada a una intersección. Ese score solo describe la carga del tráfico antes del semáforo y en el único sentido permitido de la vía. Cada sensor aporta al score con una ponderación configurable. Entre mayor sea el score, mayor será la prioridad para recibir verde. El valor final queda normalizado en **[0, 1]**.
-
-### 5.2. Pesos y Normalización
-
-Cada sensor produce primero una nota normalizada entre 0 y 1. Después, esas tres notas se combinan con pesos configurables para obtener un score final, también entre 0 y 1. En esta versión del diseño, la cámara pondera la cola efectiva al final de la vía, la espira pondera la ocupación en tránsito dentro de la vía y el GPS pondera la lentitud del flujo que todavía se encuentra circulando.
-
-Denotando las notas de cámara, espira y GPS como *n_c*, *n_e* y *n_g*:
-
-$$n_c, n_e, n_g \in [0, 1]$$
-
-$$w_c + w_e + w_g = 1$$
-
-**Pesos definidos para esta versión del diseño:**
-
-| Sensor | Peso | Justificación |
-|---|---|---|
-| Cámara (*w_c*) | **0.50** | La cola de vehículos es la señal más importante para decidir prioridad. |
-| Espira inductiva (*w_e*) | **0.35** | Muestra presión de flujo. |
-| GPS (*w_g*) | **0.15** | Solo complementa la lectura de congestión. |
-
-El score de la vía se calcula como:
-
-$$\text{score}_{vía} = w_c \cdot n_c + w_e \cdot n_e + w_g \cdot n_g$$
-
-Como los pesos suman 1 y cada nota está en [0, 1], el resultado final también queda en el rango **[0, 1]**. Estos valores pueden ajustarse si el grupo decide recalibrar el sistema.
-
-### 5.3. Comparación entre Direcciones en Conflicto
-
-Cada intersección se controla comparando las vías de entrada que están en conflicto antes del semáforo. El score se calcula por cada vía de entrada. Por ejemplo, una intersección puede tener:
-
-- Una vía que llega desde el norte con su propio score.
-- Una vía que llega desde el sur con su propio score.
-- Una vía que llega desde el este con su propio score.
-- Una vía que llega desde el oeste con su propio score.
-
-El servicio de analítica en PC2 compara las direcciones que compiten por el paso en el cruce. **La dirección con mayor score recibe prioridad.** Si los puntajes son parecidos, se mantiene la alternancia normal o se aplica una regla de desempate configurable.
-
-Como el control semafórico final se realiza por ejes lógicos (`HORIZONTAL` y `VERTICAL`), en la implementación el score por eje de una intersección se obtiene como el **promedio de los scores de las vías de entrada** asociadas a ese eje. De esta forma se conserva la idea de score por vía, pero se obtiene una medida comparable entre los dos conflictos principales del cruce.
-
-### 5.4. Temporización Semafórica
-
-La duración del verde se ajusta según la diferencia entre los scores de las direcciones en conflicto. Se toma como base un **ciclo total de 30 segundos** (15 segundos por dirección en condiciones normales). En la simulación, 1 segundo real = 1 minuto simulado, por lo que 15 segundos reales equivalen a 15 minutos dentro de la ciudad simulada.
-
-Se define:
-
-$$\text{gap} = |\text{score}_1 - \text{score}_2| \in [0, 1]$$
-
-| Valor de gap | Resultado |
-|---|---|
-| `gap = 0` | No hay diferencia de prioridad; cada dirección recibe 15 s (ciclo de 30 s). |
-| `0 < gap < 1` | La dirección con mayor score recibe una porción mayor del ciclo de 30 s. |
-| `gap = 1` | Una dirección tiene score 0; la ganadora recibe los 30 s completos. |
-
-De forma general, el tiempo de verde de la dirección prioritaria es:
-
-$$T_{verde} = 15 + 15 \cdot \text{gap}$$
-
-El tiempo restante del ciclo queda asignado a la dirección opuesta:
-
-$$T_{opuesto} = 30 - T_{verde}$$
-
-### 5.5. Control Manual
-
-Desde PC3 el usuario puede forzar manualmente el estado de un semáforo:
-
-1. Selecciona una intersección y define qué dirección o conflicto quiere priorizar.
-2. Indica por cuánto **tiempo de simulación** mantener el forzado.
-3. Mientras dure, la lógica automática basada en score queda suspendida en esa intersección.
-4. Al finalizar, la intersección regresa al control automático.
-
----
-
-## 6. Vehículos y Simulación
-
-### 6.1. PC0 como Generador de Vehículos
-
-PC0 es el generador de vehículos simulados y mantiene el estado base del tráfico. Es una extensión del grupo de computadores y **no reemplaza** a PC1, PC2 ni PC3. Desde PC0 se generan vehículos que entran a la ciudad por nodos de borde. Además, PC0 almacena el histórico completo de un día de simulación para el análisis final de estadísticas y comunica el estado de los vehículos a la base principal de PC3, a la réplica operativa de PC2 y a su propia base histórica.
-
-### 6.2. Modelo de Vehículo
-
-Cada vehículo es una entidad simulada con identificador único. Un vehículo solo puede estar en una arista a la vez. Sus atributos mínimos son:
-
-- Identificador del vehículo.
-- Arista actual en la que se encuentra.
-- Posición relativa o progreso dentro de la arista.
-- Velocidad simulada.
-- Dirección actual de movimiento.
-- Timestamp de última actualización (en tiempo de simulación).
-
-### 6.3. Movimiento dentro de la Cuadrícula
-
-Los vehículos entran al sistema por un nodo de borde y recorren aristas dirigidas entre intersecciones. Al llegar a una intersección, el vehículo decide **aleatoriamente** entre seguir derecho o tomar la alternativa permitida. No puede moverse en contra del sentido de una vía. Sale del sistema cuando llega a un nodo de salida configurado como egreso.
-
-La presencia y el movimiento de los vehículos cambian el estado de las vías: cada vehículo aporta al conteo en circulación dentro de su arista. Si el semáforo está en rojo y el vehículo llega al final de la arista, aporta al conteo de vehículos en espera.
-
-La velocidad de tránsito se asigna al vehículo cuando se instancia y permanece como atributo propio del vehículo. Cuando el carro logra pasar por una intersección con semáforo en verde y entra a una nueva vía, continúa recorriendo esa nueva arista con la misma velocidad que ya tenía asignada.
-
-### 6.4. Ambulancia
-
-Desde PC3 el usuario puede crear manualmente una ambulancia en un nodo de salida. La ambulancia cuenta como un vehículo más, pero con una representación visual distinta y una velocidad constante configurable. A medida que avanza, el usuario puede intervenir manualmente los semáforos desde PC3 para abrirle paso. La ambulancia sale del sistema al llegar a un nodo de salida.
-
-En la implementación actual, la ambulancia se modela como un vehículo de tipo **AMBULANCIA** dentro del mismo motor de simulación. No se agregan todavía atributos visuales extra, porque para una futura visualización basta con conservar su `tipo`, su `via_actual` y su `posicion_en_via` en cada tick; con eso puede distinguirse del tráfico normal y verse moverse por el mapa.
-
----
-
-## 7. Distribución por Computadores
-
-### 7.1. PC0
-
-> **Extensión propuesta al grupo de computadores.** PC0 es el generador de vehículos simulados y mantiene el estado base del tráfico.
-
-Responsabilidades:
-
-- Generar vehículos que ingresan a la ciudad por nodos de borde.
-- Mantener y actualizar la posición de cada vehículo en el grafo.
-- Mantener el estado autoritativo del mapa, las vías y los semáforos dentro de la simulación.
-- Instanciar ambulancias cuando PC3 lo solicite por ZeroMQ.
-- Recibir desde PC2 los comandos semafóricos automáticos y aplicarlos sobre la simulación.
-- Publicar snapshots operativos del estado actual hacia PC1 para que los sensores consulten ese estado sin duplicar la simulación.
-- Comunicar el estado de los vehículos en el grafo-mapa a la base de datos principal de PC3, a la réplica de PC2 y a su propia base histórica en PC0.
-- Almacenar el historial completo de un día de simulación para estadísticas finales.
-
-> PC0 **no** forma parte del mecanismo principal de respaldo cuando ocurre una falla; su almacenamiento histórico es para análisis posterior.
-
-### 7.2. PC1
-
-Responsabilidades:
-
-- Ejecutar los sensores simulados (cámara, espira inductiva y GPS) como procesos lógicos asociados a aristas que generan eventos periódicos.
-- Recibir snapshots operativos producidos por PC0 y usarlos como fuente de verdad para calcular sus mediciones.
-- Publicar eventos mediante **PUB/SUB** de ZeroMQ, con tópicos diferenciados por tipo de sensor.
-- Operar el **broker ZeroMQ** que recibe los eventos y los reenvía a PC2.
-
-### 7.3. PC2
-
-Responsabilidades:
-
-- Suscribirse a los eventos de sensores vía el broker de PC1.
-- Calcular el score por vía y determinar la fase semafórica de cada intersección.
-- Emitir como máximo **un comando por intersección y por tick de simulación**, usando el `tick_origen` de los eventos para agrupar las mediciones del mismo instante lógico.
-- Ejecutar órdenes de control sobre semáforos e imprimir por pantalla las acciones realizadas.
-- Recibir y ejecutar indicaciones de control manual provenientes de PC3.
-- Mantener la **réplica de la base de datos**, actualizada de forma asíncrona, para que el sistema pueda seguir operando si PC3 falla.
-- Exponer un **backend de respaldo** limitado a salud y consultas de estado actual, sin crear ambulancias ni emitir control manual durante el failover.
-
-### 7.4. PC3
-
-Responsabilidades:
-
-- Alojar la **base de datos principal**.
-- Proveer monitoreo y consulta del estado actual mediante **REQ/REP**.
-- Enviar indicaciones directas al servicio de analítica para forzar cambios semafóricos.
-- Exponer el **backend primario** que el cliente consulta normalmente antes de considerar el respaldo de `PC2`.
-- Visualizar la ciudad como grafo sobre cuadrícula, con vías coloreadas según congestión e indicadores de fase activa.
-- Gestionar el reloj de simulación (aceleración y ralentización).
-- Permitir al usuario crear ambulancias en nodos de salida.
-
----
-
-## 8. Persistencia y Tiempo de Simulación
-
-La primera implementación de persistencia del proyecto se realiza con **SQLite**, ya que permite mantener una base local por computador sin depender de un servidor adicional y facilita el despliegue distribuido inicial del sistema.
-
-### 8.1. Base de Datos en PC3
-
-La base de datos principal reside en PC3. Su responsabilidad principal es almacenar el **estado operativo actual** de la ciudad en tiempo real, por ejemplo:
-
-- estado actual de intersecciones,
-- estado actual de las vías,
-- estado actualizado de los vehículos dentro del grafo-mapa,
-- y el estado vigente del sistema de semaforización.
-
-PC3 **no** se concibe como el repositorio de histórico de eventos de sensores ni de comandos semafóricos. Ese tipo de información se reserva para la base histórica de **PC0**. La base principal de `PC3` se concentra en el estado presente del sistema.
-
-### 8.2. Réplica en PC2
-
-La réplica se encuentra en PC2 y se actualiza de forma **asíncrona** (PUSH/PULL u otro patrón similar). Su propósito es mantener el estado operativo actual de la ciudad, incluyendo el estado reportado de los vehículos, para que el sistema pueda seguir funcionando si PC3 falla. PC2 no es un almacén de resultados históricos de largo plazo; es un **respaldo operativo del estado presente**.
-
-Si PC3 cae, la operación cambia a la base de datos de PC2. Para evitar bloquear el núcleo operativo, los envíos hacia PC3 se manejan en modo de **mejor esfuerzo**: si la base principal no está disponible, PC0, PC1 y PC2 continúan funcionando y la réplica de PC2 sigue recibiendo el estado.
-
-Cuando PC3 vuelve a estar disponible, su base de datos se resincroniza con el estado de PC2 mediante un canal dedicado de sincronización. En el arranque, PC3 solicita a la réplica únicamente el **snapshot operativo actual**, reconstruye su estado presente a partir de esa respuesta y luego vuelve a recibir normalmente las nuevas actualizaciones.
-
-Desde el punto de vista operativo, esto implica que:
-
-- `PC0` sigue simulando y publicando snapshots aunque `PC3` no responda.
-- `PC1` sigue publicando sensores aunque no pueda persistir momentáneamente en `PC3`.
-- `PC2` sigue analizando, controlando semáforos y manteniendo su réplica operativa.
-- Los envíos hacia `PC3` no frenan el ciclo principal; si la base principal no está disponible, esos mensajes se descartan y la operación continúa.
-- `PC2` conserva la mejor foto operativa disponible del sistema hasta que `PC3` regrese.
-- La periodicidad con la que `PC0` emite esa foto también es configurable en `config/system_config.json` mediante `simulacion.intervalo_snapshot_ticks`, lo que permite controlar cada cuántos ticks se propaga el estado del mapa al resto del sistema.
-
-### 8.3. Histórico Diario en PC0
-
-PC0 almacena el historial completo de un día de simulación para análisis posterior y estadísticas finales. En esta base se concentran especialmente los datos de carácter histórico amplio, como:
-
-- eventos de sensores,
-- comandos semafóricos,
-- histórico de vehículos a lo largo del día,
-- y otros registros útiles para análisis estadístico posterior.
-
-PC0 **no** se utiliza como nodo de resiliencia operativa; su rol es exclusivamente analítico. En consecuencia, la separación adoptada es:
-
-- **PC3 y PC2**: foco en estado operativo actual y continuidad del servicio.
-- **PC0**: foco en histórico amplio, métricas y análisis posterior.
-
-### 8.3.1. Comportamiento de las Bases entre Ejecuciones
-
-Si el usuario detiene una ejecución y luego vuelve a arrancar el sistema sin borrar las bases SQLite, no todos los computadores se comportan igual:
-
-- La simulación **no se reanuda** desde base de datos. Cada vez que `PC0` arranca, construye un mapa nuevo y un motor de simulación nuevo en memoria, por lo que vehículos, posiciones y ticks comienzan de nuevo desde cero en el proceso activo.
-- La base histórica de `PC0` **sí acumula** datos entre corridas. Si no se limpia, seguirá agregando nuevos eventos de sensores, comandos semafóricos y snapshots históricos de vehículos sobre los registros que ya existían.
-- Las bases de `PC2` y `PC3` conservan el último **estado actual persistido** que hubiera quedado de una ejecución anterior. Sin embargo, ese estado no gobierna la simulación nueva: se reemplaza con los snapshots operativos frescos que empiece a emitir `PC0`.
-- Mientras no llegue el primer snapshot nuevo, una consulta temprana a `PC2` o `PC3` todavía podría mostrar estado viejo persistido de la corrida anterior.
-- Si `PC3` arranca antes de que la nueva simulación produzca snapshots, puede resincronizarse temporalmente con el último snapshot viejo almacenado en `PC2`; esa situación se corrige en cuanto `PC0` vuelve a emitir estado nuevo.
-
-Por esta razón, si se quiere una prueba completamente limpia y sin mezclar corridas anteriores, deben borrarse previamente las SQLite de `PC0`, `PC2` y `PC3`.
-
-### 8.4. Reloj de Simulación
-
-El sistema comparte un **reloj global de simulación** que representa un día de **12:00 a 18:00**. Por defecto:
-
-- **1 segundo real = 1 minuto simulado.**
-- Un cambio semafórico normal de 15 segundos en tiempo real equivale a 15 minutos dentro de la ciudad simulada.
-
-Desde PC3 esta relación puede acelerarse o ralentizarse. Todos los eventos (sensores, vehículos, semáforos y persistencia) usan el tiempo de simulación. El histórico en PC0 se indexa con este reloj.
-
-En la implementación actual, ese rango horario también aparece de forma explícita en `config/system_config.json` mediante `simulacion.hora_inicio_simulada` y `simulacion.hora_fin_simulada`. Por ahora estos parámetros se usan como referencia visible del reloj lógico y para enriquecer los logs de `PC0`; todavía no se usa `hora_fin_simulada` para detener automáticamente la simulación al final del día.
-
----
-
-## 9. Interacción entre Componentes
-
-### 9.1. Flujo General del Sistema
-
-```
-1. PC0  → Genera vehículos y mantiene el estado base del tráfico.
-2. PC0  → Comunica el estado de los vehículos a PC3 (BD principal),
-           PC2 (réplica operativa) y PC0 (base histórica).
-3. PC1  → Ejecuta sensores y publica eventos a través del broker ZeroMQ.
-4. PC2  → Se suscribe a los eventos, calcula analítica por vía, agrupa
-           scores por eje en cada intersección, revisa conflictos
-           y determina fases semafóricas.
-5. PC3  → Permite monitorear, consultar y emitir indicaciones de control manual.
+## Repository Layout
+
+```text
+PC0/
+  simulation/        Authoritative traffic simulation.
+  historic_db/       Historical SQLite database for simulation runs.
+PC1/
+  sensors/           Logical camera, inductive-loop, and GPS sensors.
+  broker/            ZeroMQ broker for sensor events.
+PC2/
+  analytics/         Traffic scoring and semaphore decisions.
+  traffic_ctrl/      Semaphore command sender.
+  replica_db/        Current-state replica and PC3 resync channel.
+  backend_respaldo/  Backup backend for health and current-state queries.
+PC3/
+  main_db/           Main current-state SQLite database.
+  backend/           Primary backend for user operations.
+  frontend/          Web UI served by the PC3 backend.
+common/
+  mensajes/          Shared message contracts.
+  modelos/           Domain and simulation models.
+  utilidades/        Shared config, logging, persistence, and ZeroMQ helpers.
+config/
+  system_config.json Central runtime configuration.
+scripts/
+  start_*.sh         Local and per-PC startup scripts.
 ```
 
-En la implementación actual, **PC0 es el dueño real del mapa y de los vehículos**. Por ello, PC2 envía comandos semafóricos de regreso a PC0 mediante ZeroMQ usando un canal asíncrono **PUSH/PULL**, y PC0 aplica esos cambios sobre la simulación antes de generar el siguiente tick. A su vez, PC0 transmite snapshots operativos del estado actual hacia PC1, para que los sensores consulten ese estado y emitan sus eventos sin ser propietarios de la simulación.
+## Configuration
 
-Para facilitar pruebas sin interfaz gráfica, `PC0` registra en logs la creación de cada vehículo normal con sus atributos principales: identificador, tipo, vía, origen, destino, dirección, velocidad, estado, tick y hora simulada.
+The main configuration file is `config/system_config.json`. It is loaded with Python's `json.load`, so comments are represented with `_comentario` and `_comentarios` keys instead of native JSON comments.
 
-Un **snapshot operativo** puede entenderse como una foto del estado actual del sistema en un tick determinado. En términos prácticos, este snapshot sirve para que:
+Main blocks:
 
-- **PC0 le diga a PC1:** "así está el mundo ahorita".
-- **PC1** use esa foto para calcular sensores.
-- **PC2** y **PC3** guarden estado actual.
-- **PC3** pueda resincronizarse desde **PC2** si volvió a levantarse.
+- `ciudad`: grid size, road length range, and generation seed.
+- `sensores`: active sensor types and publication interval.
+- `analitica`: weights used to combine camera, inductive-loop, and GPS measurements.
+- `simulacion`: tick duration, simulated clock, vehicle generation, ambulance speed, and snapshot interval.
+- `frontend`: PC3 web server host and port.
+- `zmq`: every ZeroMQ endpoint used by PC0, PC1, PC2, and PC3.
 
-La cadencia de envío del snapshot también se controla por configuración. En la implementación actual, `PC0` emite un primer snapshot en el primer tick de simulación y, a partir de ahí, vuelve a emitirlo cada `N` ticks según el valor configurado en `simulacion.intervalo_snapshot_ticks`.
+For local execution, endpoints can stay as `tcp://127.0.0.1:port`. For multiple computers, replace each endpoint host with the IP of the machine that owns that service.
 
-Los endpoints ZeroMQ se definen por configuración. Durante el desarrollo local pueden usarse direcciones como `tcp://127.0.0.1:puerto`, pero en pruebas sobre varios computadores esos valores deben reemplazarse por las IP o nombres de host reales de cada máquina, sin necesidad de modificar el código fuente.
+## Traffic Logic
 
-Adicionalmente, el servicio de analítica aplica una estrategia de **deduplicación de comandos semafóricos**: si para una intersección la fase y los tiempos calculados no cambian respecto a la última orden emitida, el sistema no reenvía exactamente el mismo comando. Esto reduce ruido, evita saturar el canal de control y permite que la temporización de los semáforos evolucione con mayor estabilidad.
+Each observed road has three logical sensors:
 
-Sobre esa deduplicación se agrega una segunda restricción: la analítica solo puede emitir **una decisión por intersección en cada tick de origen**. Aunque los eventos lleguen de manera secuencial, PC2 espera a tener completas las mediciones requeridas de ese tick y solo entonces calcula una única decisión para esa intersección.
+- Camera: measures queued vehicles at the end of a road.
+- Inductive loop: measures vehicles still moving inside the road.
+- GPS: measures average speed of moving vehicles.
 
-### 9.2. Creación de Ambulancias
+PC2 normalizes each measurement to `[0, 1]` and combines them into a road score:
 
-Cuando el usuario crea una ambulancia desde PC3:
+```text
+score = camera_weight * camera_note
+      + loop_weight * loop_note
+      + gps_weight * gps_note
+```
 
-1. PC3 envía la solicitud por ZeroMQ a PC0, indicando el nodo de salida donde debe aparecer la ambulancia.
-2. PC0 instancia la ambulancia como una entidad vehicular especial dentro de la simulación.
-3. PC3 la visualiza con una representación diferenciada (por ejemplo, icono de sirena) respecto al tráfico normal.
+Current default weights:
 
-En el estado actual del proyecto, este flujo se implementa con un canal ZeroMQ dedicado de tipo **PUSH/PULL**:
+| Sensor | Weight |
+|---|---:|
+| Camera | 0.50 |
+| Inductive loop | 0.35 |
+| GPS | 0.15 |
 
-- El backend principal de `PC3` actúa como emisor de una `SolicitudAmbulancia`.
-- `PC0` mantiene un receptor específico para solicitudes de ambulancia.
-- La solicitud contiene al menos el `nodo_origen` y puede incluir una velocidad explícita.
-- Si el nodo recibido no corresponde a una entrada válida del sistema, `PC0` descarta la solicitud y la registra en logs.
-- Si la solicitud es válida, `PC0` crea la ambulancia y la incorpora al siguiente ciclo operativo del motor de simulación.
-- Si `PC3` está caído, la creación de ambulancias queda temporalmente indisponible para el usuario, aunque el núcleo operativo del sistema sigue funcionando.
+For each intersection, PC2 groups road scores by axis (`HORIZONTAL` or `VERTICAL`) and gives priority to the axis with the higher score. It emits at most one semaphore decision per intersection and simulation tick, avoiding duplicate commands when the phase and timing do not change.
 
-Operativamente, el flujo exacto queda así:
+Manual control from PC3 can temporarily force a semaphore phase. While the manual override is active, automatic decisions for that intersection are suspended.
 
-- `PC3/backend` corre el **backend principal** y es el único backend autorizado para aceptar operaciones activas de usuario como `crear_ambulancia`.
-- `PC2/backend_respaldo` corre un **backend de respaldo** con el mismo protocolo de solicitudes, pero con alcance restringido a salud y consulta de estado actual.
-- El cliente de failover intenta primero hablar con `PC3`; si no recibe respuesta, reintenta automáticamente la **misma solicitud** contra `PC2`.
-- Por eso `PC2` puede llegar a **recibir** una solicitud de creación de ambulancia, pero no a ejecutarla.
-- Cuando eso ocurre, `PC2` responde con el error `operacion_no_disponible_en_respaldo`, dejando claro que el respaldo sigue vivo, pero no está autorizado para operaciones activas.
-- La ambulancia **nunca se crea en el backend**: el backend solo construye y emite la `SolicitudAmbulancia`; la creación real ocurre exclusivamente en `PC0`, cuando el motor de simulación la inyecta en el mapa.
+## Persistence and Failover
 
-### 9.3. Priorización Manual de Semáforos
+The project uses SQLite databases generated at runtime:
 
-Cuando el usuario fuerza un semáforo desde PC3:
+- `PC0/historic_db/bd_historica.sqlite3`: historical data for later analysis.
+- `PC2/replica_db/bd_replicada.sqlite3`: current operational state replica.
+- `PC3/main_db/bd_principal.sqlite3`: main current operational state.
 
-1. El backend principal de `PC3` envía la orden al servicio de analítica/control en PC2.
-2. La orden indica qué intersección y qué dirección o conflicto priorizar, y por cuánto tiempo de simulación mantener el forzado.
-3. PC2 ejecuta el forzado, suspendiendo temporalmente la lógica automática en esa intersección.
-4. Al finalizar el período indicado, la intersección regresa automáticamente al control por score.
+PC3 is the primary backend and database owner for user-facing operations. PC2 keeps a current-state replica and exposes a limited backup backend. If PC3 fails:
 
-En la implementación actual este forzado se realiza así:
+- PC0 keeps simulating and publishing snapshots.
+- PC1 keeps publishing sensor events.
+- PC2 keeps analyzing traffic, controlling semaphores, and storing current state.
+- PC2 can answer health and current-state queries.
+- Creating ambulances and sending new manual controls are disabled until PC3 returns.
 
-- el backend principal emite una `SolicitudControlManual` por ZeroMQ hacia un receptor específico en `PC2`;
-- `PC2` valida la intersección, genera un `ComandoSemaforo` manual y lo envía inmediatamente a `PC0`;
-- el comando manual se refleja en el estado operativo por medio de los snapshots sucesivos generados por `PC0`;
-- mientras dura el forzado, la analítica automática no emite decisiones nuevas para esa intersección.
-- Si `PC3` no está disponible, no se aceptan nuevos controles manuales desde el respaldo.
+When PC3 starts again, it requests the latest snapshot from PC2 and rebuilds its current state before continuing normally.
 
----
+## Requirements
 
-## 10. Inicialización del Sistema
-
-### 10.1. Configuración Inicial
-
-Se define un archivo (o conjunto de archivos) de configuración compartidos que todos los componentes leen al arrancar. Esta configuración incluye al menos:
-
-- Tamaño de la cuadrícula (N×M).
-- Intersecciones activas y nodos de salida.
-- Número y tipo de sensores por arista o acceso instrumentado.
-- Parámetros de semáforos (tiempo base y duración del ciclo).
-- Pesos de ponderación de sensores y umbrales de analítica.
-- Parámetros del reloj de simulación (hora inicio, hora fin, factor de velocidad).
-- Parámetros de generación de vehículos (tasa de ingreso, velocidades).
-
-Esta configuración centralizada permite que el arranque sea reproducible y que los parámetros se ajusten sin cambiar código.
-
-### 10.2. Orden de Arranque
-
-| Orden | Componente | Qué levanta |
-|---|---|---|
-| 1 | **PC3** | Base de datos principal, servicio de monitoreo y reloj de simulación. |
-| 2 | **PC2** | Servicio de analítica, control semafórico y réplica operativa de la BD. |
-| 3 | **PC1** | Sensores simulados y broker ZeroMQ. |
-| 4 | **PC0** | Generación de vehículos y almacenamiento histórico diario. |
-
-Este orden garantiza que los componentes consumidores y de persistencia estén disponibles antes de empezar a emitir eventos y a mover vehículos.
-
-### 10.3. Prioridad de Implementación
-
-Para la implementación incremental del proyecto se prioriza primero el núcleo operativo formado por **PC0, PC1 y PC2**. En esta etapa se busca completar:
-
-- simulación vehicular y estado base del mapa en PC0,
-- sensado y broker en PC1,
-- analítica, control semafórico y réplica operativa en PC2.
-
-Durante la primera fase, **PC3** se mantuvo con un alcance mínimo de persistencia. Una vez estabilizado el flujo central `PC0-PC1-PC2`, se añadió un backend mínimo en `PC3`, un backend de respaldo reducido en `PC2` y una interfaz web operativa servida desde `PC3`, enfocada en visualización del estado actual, creación de ambulancias y control manual.
-
----
-
-## 11. Ejecución del Workspace
-
-### 11.1. Requisitos
-
-El proyecto está implementado en Python y usa ZeroMQ por medio de `pyzmq`. Antes de ejecutar cualquier componente, instalar las dependencias en cada computador que participe:
+Use Python 3 and install the project dependencies on every computer that will run a service:
 
 ```bash
 python3 -m venv .venv
@@ -637,39 +130,44 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-Los scripts de arranque ya exportan `PYTHONPATH` apuntando a la raíz del repositorio. Si se ejecuta un módulo manualmente, hacerlo desde la raíz del workspace o definir `PYTHONPATH` de forma equivalente:
+The startup scripts export `PYTHONPATH` automatically. If running modules manually, execute them from the repository root or set:
 
 ```bash
 export PYTHONPATH="$PWD"
 ```
 
-### 11.2. Ejecución Local en un Solo PC
+## Run Locally
 
-Para correr todos los procesos en la misma máquina, dejar los endpoints de `config/system_config.json` en `127.0.0.1` y ejecutar:
+To run every component on one machine, keep the ZeroMQ endpoints in `config/system_config.json` as `127.0.0.1` and run:
 
 ```bash
 bash scripts/start_localhost.sh
 ```
 
-Ese script levanta, en orden, las bases de datos, el broker, la réplica, los backends, la analítica, los sensores y la simulación. El backend de `PC3` también inicia la interfaz web. La URL se imprime en logs y, con la configuración actual, normalmente queda en:
+The PC3 backend starts the web interface. With the default configuration, it is usually available at:
 
 ```text
 http://127.0.0.1:8080/
 ```
 
-Si se quiere iniciar una corrida limpia, se pueden borrar las bases SQLite generadas antes de arrancar:
+To start from clean databases:
 
 ```bash
 bash scripts/limpiar_bases.sh
 ```
 
-### 11.3. Ejecución Distribuida en Varios PCs
+## Run on Multiple Computers
 
-Para ejecutar el sistema en computadores distintos, cada máquina debe tener una copia del repositorio, las dependencias instaladas y el mismo `config/system_config.json`. La diferencia principal frente a la ejecución local está en los endpoints de red.
+Each computer must have:
 
-En la configuración actual, todos los endpoints están en `tcp://127.0.0.1:puerto`, lo cual solo funciona cuando todos los procesos corren en el mismo computador. En una red real, cada endpoint debe apuntar a la IP del computador que hace `bind` sobre ese puerto:
+- A copy of the repository.
+- The same updated `config/system_config.json`.
+- The dependencies from `requirements.txt`.
+- Network access to the configured ZeroMQ ports.
 
-| Bloque de configuración | Endpoint | Lo atiende |
+The important rule is: each `zmq` endpoint must use the IP of the computer that binds that endpoint.
+
+| Config block | Endpoint | Bound by |
 |---|---|---|
 | `zmq.pc0` | `ingesta_historica` | `PC0/historic_db` |
 | `zmq.pc0` | `entrada_comandos` | `PC0/simulation` |
@@ -684,43 +182,24 @@ En la configuración actual, todos los endpoints están en `tcp://127.0.0.1:puer
 | `zmq.pc3` | `ingesta_principal` | `PC3/main_db` |
 | `zmq.pc3` | `backend_principal` | `PC3/backend` |
 
-Por ejemplo, si las máquinas tienen estas IPs:
+Example:
 
-| Máquina | IP de ejemplo |
+| Machine | Example IP |
 |---|---|
 | PC0 | `192.168.1.10` |
 | PC1 | `192.168.1.11` |
 | PC2 | `192.168.1.12` |
 | PC3 | `192.168.1.13` |
 
-Entonces los endpoints de `zmq.pc0` deben usar `192.168.1.10`, los de `zmq.pc1` deben usar `192.168.1.11`, los de `zmq.pc2` deben usar `192.168.1.12` y los de `zmq.pc3` deben usar `192.168.1.13`.
+In that setup, every endpoint under `zmq.pc0` should use `192.168.1.10`, every endpoint under `zmq.pc1` should use `192.168.1.11`, and so on.
 
-Ejemplo parcial:
-
-```json
-{
-  "zmq": {
-    "pc0": {
-      "ingesta_historica": "tcp://192.168.1.10:5560",
-      "entrada_comandos": "tcp://192.168.1.10:5557",
-      "solicitudes_ambulancia": "tcp://192.168.1.10:5564"
-    },
-    "pc1": {
-      "publicador_sensores": "tcp://192.168.1.11:5555",
-      "salida_broker": "tcp://192.168.1.11:5556",
-      "entrada_estado_operativo": "tcp://192.168.1.11:5558"
-    }
-  }
-}
-```
-
-Además, si la interfaz web de `PC3` debe verse desde otros computadores, ajustar `frontend.pc3.host`. Para uso solo local puede quedarse en `127.0.0.1`; para exponerla en la red se puede usar la IP de `PC3`, por ejemplo `192.168.1.13`, o `0.0.0.0` si se quiere escuchar en todas las interfaces. En cualquier caso, el navegador debe abrir la IP real de `PC3`, por ejemplo:
+If the PC3 web interface must be opened from another computer, also update `frontend.pc3.host` to PC3's LAN IP or to `0.0.0.0`. Then open the real PC3 address in the browser, for example:
 
 ```text
 http://192.168.1.13:8080/
 ```
 
-Con el archivo configurado, iniciar en cada computador el script correspondiente:
+Recommended startup order:
 
 ```bash
 bash scripts/start_pc3.sh
@@ -729,72 +208,21 @@ bash scripts/start_pc1.sh
 bash scripts/start_pc0.sh
 ```
 
-El orden recomendado es `PC3`, `PC2`, `PC1` y finalmente `PC0`, para que los consumidores estén listos antes de que la simulación empiece a emitir snapshots y eventos.
+Start PC0 last so databases, broker, analytics, and backends are ready before the simulation begins publishing snapshots.
 
-### 11.4. ¿Solo Hay que Cambiar las IPs de `system_config`?
+## Common Question
 
-Para cambiar de ejecución local a ejecución en varios PCs, **sí: el cambio de red del programa está centralizado en `config/system_config.json`**. No debería ser necesario modificar código fuente si los procesos se mantienen en los mismos roles y puertos.
+Do I only need to change the IPs in `system_config.json` to run this on different PCs?
 
-En la práctica también hay que verificar estos puntos:
+Mostly yes. The network configuration is centralized there, so no source-code change should be needed if the same roles and ports are used. In practice, also check:
 
-- Copiar el mismo repositorio y el mismo `config/system_config.json` actualizado en todos los PCs.
-- Instalar `requirements.txt` en cada PC.
-- Usar en cada endpoint la IP del computador que atiende ese canal, según la tabla anterior.
-- Abrir en el firewall los puertos configurados, especialmente `5555` a `5567` con la configuración actual.
-- Asegurar que todos los PCs estén en la misma red o tengan rutas/VPN válidas entre sí.
-- Ajustar `frontend.pc3.host` si la interfaz de `PC3` se va a consultar desde otra máquina.
-- No usar `127.0.0.1` para comunicar PCs distintos, porque siempre apunta a la propia máquina.
+- All PCs have the same repository version and the same updated config file.
+- Dependencies are installed on every PC.
+- Firewall rules allow the configured ports, currently `5555` to `5567`.
+- The PCs are on the same network or can reach each other through valid routes/VPN.
+- `frontend.pc3.host` is adjusted if the UI is accessed from another machine.
+- `127.0.0.1` is not used for services that must communicate across different computers.
 
----
+## Generated Files
 
-## 12. Fallos y Continuidad Operativa
-
-### 12.1. Caída de PC3
-
-La falla principal considerada es la **caída de PC3**. Si PC3 falla, el backend principal deja de responder, pero el sistema no pierde el control operativo porque `PC0`, `PC1` y `PC2` continúan ejecutando la simulación, el sensado, la analítica y la réplica de estado.
-
-### 12.2. Continuidad con PC2
-
-Ante la caída de PC3, el sistema sigue operando con la **réplica en PC2**. Los componentes internos (`PC0`, `PC1` y `PC2`) nunca dejan de trabajar, y el respaldo puede exponer consultas de estado actual para observación mínima si se necesita.
-
-Si PC3 se vuelve a levantar, se sincroniza su base de datos con el estado actual de PC2. Al terminar esa actualización, el cliente vuelve automáticamente a `PC3` como backend principal.
-
-La operación mínima de continuidad incluye también una consulta de **salud**. Esta consulta funciona como un *ping* del backend y permite saber qué servidor atendió la solicitud. Si responde `PC3`, el cliente sigue en el camino normal; si `PC3` no responde y la petición cae a `PC2`, la respuesta de salud identifica explícitamente al respaldo como backend activo.
-
-### 12.3. Limitaciones Durante la Falla
-
-Durante la falla de PC3, las siguientes funcionalidades quedan **indisponibles**:
-
-- creación de nuevas ambulancias desde la capa de usuario;
-- emisión de nuevas órdenes manuales de priorización semafórica;
-- cualquier consulta basada en histórico de eventos o comandos;
-- la parte visual que depende estrictamente de procesos alojados en `PC3`, incluyendo la interfaz web servida por el backend principal.
-
-Durante la falla solo se mantiene, como máximo, consulta básica de estado actual desde el respaldo.
-
-En consecuencia, el cliente de failover puede reenviar al respaldo solicitudes activas como `crear_ambulancia` o `control_manual`, pero el respaldo no las ejecuta: responde de forma explícita que la operación no está disponible en modo respaldo. Este rechazo es deliberado y forma parte del diseño, para evitar que la continuidad operativa de `PC2` se convierta en una capa completa de control de usuario.
-
-> **Nota:** PC0 no participa en el cambio a un respaldo cuando ocurre una falla. El escenario de resiliencia queda así: `PC3` cae → el núcleo `PC0-PC1-PC2` sigue funcionando → opcionalmente `PC2` expone solo estado actual → `PC3` vuelve → se resincroniza desde `PC2` con el snapshot operativo → el cliente regresa automáticamente al primario.
-
-Durante el proceso de resincronización de PC3 pueden seguir ocurriendo cambios en el sistema mientras se copia el estado desde PC2. Por esta razón, se acepta que al volver a operar con PC3 pueda aparecer una **pequeña inconsistencia temporal** o una leve sensación de retroceso en el tiempo dentro de la simulación. Esta limitación se considera aceptable dentro del alcance del proyecto.
-
----
-
-## 13. Comparación de Rendimiento del Broker
-
-### 13.1. Versión Base
-
-Primera versión del broker en PC1 con una lógica simple y **sin concurrencia interna**. Recibe eventos y los reenvía a PC2 de manera secuencial. Esta es la línea base del experimento de rendimiento.
-
-### 13.2. Versión Modificada con Hilos
-
-Segunda versión del broker que introduce **hilos** para separar la recepción, el encolado y el reenvío de eventos en paralelo.
-
-**Métricas de comparación entre ambas versiones:**
-
-| Métrica | Descripción |
-|---|---|
-| Cantidad de eventos en BD | Eventos almacenados en la BD en una ventana de **2 minutos**. |
-| Latencia de control | Tiempo desde que el usuario solicita una acción hasta que el semáforo cambia. |
-
-Los escenarios de prueba varían el número de sensores y el tiempo entre generación de mediciones (ver Tabla 1 del enunciado del proyecto).
+Runtime SQLite databases, WAL/SHM files, Python caches, virtual environments, logs, binaries, and build outputs are ignored by `.gitignore`.
