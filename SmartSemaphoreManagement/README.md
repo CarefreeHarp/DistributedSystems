@@ -40,8 +40,9 @@ graph LR
 8. [Persistencia y Tiempo de Simulación](#8-persistencia-y-tiempo-de-simulación)
 9. [Interacción entre Componentes](#9-interacción-entre-componentes)
 10. [Inicialización del Sistema](#10-inicialización-del-sistema)
-11. [Fallos y Continuidad Operativa](#11-fallos-y-continuidad-operativa)
-12. [Comparación de Rendimiento del Broker](#12-comparación-de-rendimiento-del-broker)
+11. [Ejecución del Workspace](#11-ejecución-del-workspace)
+12. [Fallos y Continuidad Operativa](#12-fallos-y-continuidad-operativa)
+13. [Comparación de Rendimiento del Broker](#13-comparación-de-rendimiento-del-broker)
 
 ---
 
@@ -150,8 +151,9 @@ Además de `common`, el repositorio se organiza por el rol de cada computador:
 - `PC2/backend_respaldo`: backend de respaldo limitado a continuidad y consulta de estado actual cuando `PC3` no está disponible.
 - `PC3/main_db`: base principal y servicio de persistencia/resincronización.
 - `PC3/backend`: backend principal de consultas de estado, creación de ambulancias y control manual.
+- `PC3/frontend`: interfaz web local servida por el backend principal de `PC3`.
 
-Como criterio de mantenimiento del repositorio, se evita conservar directorios vacíos o de andamio que todavía no cumplen una función real en la implementación. Si en una fase posterior vuelve a ser necesario separar responsabilidades como generadores, variantes de broker, reloj explícito o frontend, esas carpetas pueden recrearse en ese momento para dejar un esqueleto del proyecto claro, limpio y alineado con el estado real del código.
+Como criterio de mantenimiento del repositorio, se evita conservar directorios vacíos o de andamio que todavía no cumplen una función real en la implementación. Si en una fase posterior vuelve a ser necesario separar responsabilidades como generadores, variantes de broker o reloj explícito, esas carpetas pueden recrearse en ese momento para dejar un esqueleto del proyecto claro, limpio y alineado con el estado real del código.
 
 ---
 
@@ -619,17 +621,139 @@ Para la implementación incremental del proyecto se prioriza primero el núcleo 
 - sensado y broker en PC1,
 - analítica, control semafórico y réplica operativa en PC2.
 
-Durante la primera fase, **PC3** se mantuvo con un alcance mínimo de persistencia. Una vez estabilizado el flujo central `PC0-PC1-PC2`, se añadió un backend mínimo en `PC3` y un backend de respaldo reducido en `PC2`, enfocado solamente en continuidad y consulta del estado presente, dejando para una etapa posterior la visualización rica del mapa y el servicio explícito de reloj.
+Durante la primera fase, **PC3** se mantuvo con un alcance mínimo de persistencia. Una vez estabilizado el flujo central `PC0-PC1-PC2`, se añadió un backend mínimo en `PC3`, un backend de respaldo reducido en `PC2` y una interfaz web operativa servida desde `PC3`, enfocada en visualización del estado actual, creación de ambulancias y control manual.
 
 ---
 
-## 11. Fallos y Continuidad Operativa
+## 11. Ejecución del Workspace
 
-### 11.1. Caída de PC3
+### 11.1. Requisitos
+
+El proyecto está implementado en Python y usa ZeroMQ por medio de `pyzmq`. Antes de ejecutar cualquier componente, instalar las dependencias en cada computador que participe:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+Los scripts de arranque ya exportan `PYTHONPATH` apuntando a la raíz del repositorio. Si se ejecuta un módulo manualmente, hacerlo desde la raíz del workspace o definir `PYTHONPATH` de forma equivalente:
+
+```bash
+export PYTHONPATH="$PWD"
+```
+
+### 11.2. Ejecución Local en un Solo PC
+
+Para correr todos los procesos en la misma máquina, dejar los endpoints de `config/system_config.json` en `127.0.0.1` y ejecutar:
+
+```bash
+bash scripts/start_localhost.sh
+```
+
+Ese script levanta, en orden, las bases de datos, el broker, la réplica, los backends, la analítica, los sensores y la simulación. El backend de `PC3` también inicia la interfaz web. La URL se imprime en logs y, con la configuración actual, normalmente queda en:
+
+```text
+http://127.0.0.1:8080/
+```
+
+Si se quiere iniciar una corrida limpia, se pueden borrar las bases SQLite generadas antes de arrancar:
+
+```bash
+bash scripts/limpiar_bases.sh
+```
+
+### 11.3. Ejecución Distribuida en Varios PCs
+
+Para ejecutar el sistema en computadores distintos, cada máquina debe tener una copia del repositorio, las dependencias instaladas y el mismo `config/system_config.json`. La diferencia principal frente a la ejecución local está en los endpoints de red.
+
+En la configuración actual, todos los endpoints están en `tcp://127.0.0.1:puerto`, lo cual solo funciona cuando todos los procesos corren en el mismo computador. En una red real, cada endpoint debe apuntar a la IP del computador que hace `bind` sobre ese puerto:
+
+| Bloque de configuración | Endpoint | Lo atiende |
+|---|---|---|
+| `zmq.pc0` | `ingesta_historica` | `PC0/historic_db` |
+| `zmq.pc0` | `entrada_comandos` | `PC0/simulation` |
+| `zmq.pc0` | `solicitudes_ambulancia` | `PC0/simulation` |
+| `zmq.pc1` | `publicador_sensores` | `PC1/broker` |
+| `zmq.pc1` | `salida_broker` | `PC1/broker` |
+| `zmq.pc1` | `entrada_estado_operativo` | `PC1/sensors` |
+| `zmq.pc2` | `ingesta_replicada` | `PC2/replica_db` |
+| `zmq.pc2` | `sincronizacion_estado` | `PC2/replica_db` |
+| `zmq.pc2` | `entrada_control_manual` | `PC2/analytics` |
+| `zmq.pc2` | `backend_respaldo` | `PC2/backend_respaldo` |
+| `zmq.pc3` | `ingesta_principal` | `PC3/main_db` |
+| `zmq.pc3` | `backend_principal` | `PC3/backend` |
+
+Por ejemplo, si las máquinas tienen estas IPs:
+
+| Máquina | IP de ejemplo |
+|---|---|
+| PC0 | `192.168.1.10` |
+| PC1 | `192.168.1.11` |
+| PC2 | `192.168.1.12` |
+| PC3 | `192.168.1.13` |
+
+Entonces los endpoints de `zmq.pc0` deben usar `192.168.1.10`, los de `zmq.pc1` deben usar `192.168.1.11`, los de `zmq.pc2` deben usar `192.168.1.12` y los de `zmq.pc3` deben usar `192.168.1.13`.
+
+Ejemplo parcial:
+
+```json
+{
+  "zmq": {
+    "pc0": {
+      "ingesta_historica": "tcp://192.168.1.10:5560",
+      "entrada_comandos": "tcp://192.168.1.10:5557",
+      "solicitudes_ambulancia": "tcp://192.168.1.10:5564"
+    },
+    "pc1": {
+      "publicador_sensores": "tcp://192.168.1.11:5555",
+      "salida_broker": "tcp://192.168.1.11:5556",
+      "entrada_estado_operativo": "tcp://192.168.1.11:5558"
+    }
+  }
+}
+```
+
+Además, si la interfaz web de `PC3` debe verse desde otros computadores, ajustar `frontend.pc3.host`. Para uso solo local puede quedarse en `127.0.0.1`; para exponerla en la red se puede usar la IP de `PC3`, por ejemplo `192.168.1.13`, o `0.0.0.0` si se quiere escuchar en todas las interfaces. En cualquier caso, el navegador debe abrir la IP real de `PC3`, por ejemplo:
+
+```text
+http://192.168.1.13:8080/
+```
+
+Con el archivo configurado, iniciar en cada computador el script correspondiente:
+
+```bash
+bash scripts/start_pc3.sh
+bash scripts/start_pc2.sh
+bash scripts/start_pc1.sh
+bash scripts/start_pc0.sh
+```
+
+El orden recomendado es `PC3`, `PC2`, `PC1` y finalmente `PC0`, para que los consumidores estén listos antes de que la simulación empiece a emitir snapshots y eventos.
+
+### 11.4. ¿Solo Hay que Cambiar las IPs de `system_config`?
+
+Para cambiar de ejecución local a ejecución en varios PCs, **sí: el cambio de red del programa está centralizado en `config/system_config.json`**. No debería ser necesario modificar código fuente si los procesos se mantienen en los mismos roles y puertos.
+
+En la práctica también hay que verificar estos puntos:
+
+- Copiar el mismo repositorio y el mismo `config/system_config.json` actualizado en todos los PCs.
+- Instalar `requirements.txt` en cada PC.
+- Usar en cada endpoint la IP del computador que atiende ese canal, según la tabla anterior.
+- Abrir en el firewall los puertos configurados, especialmente `5555` a `5567` con la configuración actual.
+- Asegurar que todos los PCs estén en la misma red o tengan rutas/VPN válidas entre sí.
+- Ajustar `frontend.pc3.host` si la interfaz de `PC3` se va a consultar desde otra máquina.
+- No usar `127.0.0.1` para comunicar PCs distintos, porque siempre apunta a la propia máquina.
+
+---
+
+## 12. Fallos y Continuidad Operativa
+
+### 12.1. Caída de PC3
 
 La falla principal considerada es la **caída de PC3**. Si PC3 falla, el backend principal deja de responder, pero el sistema no pierde el control operativo porque `PC0`, `PC1` y `PC2` continúan ejecutando la simulación, el sensado, la analítica y la réplica de estado.
 
-### 11.2. Continuidad con PC2
+### 12.2. Continuidad con PC2
 
 Ante la caída de PC3, el sistema sigue operando con la **réplica en PC2**. Los componentes internos (`PC0`, `PC1` y `PC2`) nunca dejan de trabajar, y el respaldo puede exponer consultas de estado actual para observación mínima si se necesita.
 
@@ -637,14 +761,14 @@ Si PC3 se vuelve a levantar, se sincroniza su base de datos con el estado actual
 
 La operación mínima de continuidad incluye también una consulta de **salud**. Esta consulta funciona como un *ping* del backend y permite saber qué servidor atendió la solicitud. Si responde `PC3`, el cliente sigue en el camino normal; si `PC3` no responde y la petición cae a `PC2`, la respuesta de salud identifica explícitamente al respaldo como backend activo.
 
-### 11.3. Limitaciones Durante la Falla
+### 12.3. Limitaciones Durante la Falla
 
 Durante la falla de PC3, las siguientes funcionalidades quedan **indisponibles**:
 
 - creación de nuevas ambulancias desde la capa de usuario;
 - emisión de nuevas órdenes manuales de priorización semafórica;
 - cualquier consulta basada en histórico de eventos o comandos;
-- la parte visual que dependa estrictamente de procesos alojados solo en `PC3`, como un frontend futuro o un reloj explícito aún no replicado.
+- la parte visual que depende estrictamente de procesos alojados en `PC3`, incluyendo la interfaz web servida por el backend principal.
 
 Durante la falla solo se mantiene, como máximo, consulta básica de estado actual desde el respaldo.
 
@@ -656,13 +780,13 @@ Durante el proceso de resincronización de PC3 pueden seguir ocurriendo cambios 
 
 ---
 
-## 12. Comparación de Rendimiento del Broker
+## 13. Comparación de Rendimiento del Broker
 
-### 12.1. Versión Base
+### 13.1. Versión Base
 
 Primera versión del broker en PC1 con una lógica simple y **sin concurrencia interna**. Recibe eventos y los reenvía a PC2 de manera secuencial. Esta es la línea base del experimento de rendimiento.
 
-### 12.2. Versión Modificada con Hilos
+### 13.2. Versión Modificada con Hilos
 
 Segunda versión del broker que introduce **hilos** para separar la recepción, el encolado y el reenvío de eventos en paralelo.
 
