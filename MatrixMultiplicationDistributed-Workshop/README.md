@@ -73,7 +73,7 @@ Example of the times obtained (first 5 runs):
 | 200 | 4 | 4 | 0.006441 |
 | 200 | 4 | 5 | 0.013686 |
 
-The complete results are located in `LaptopNode0/Resultados/` and `LaptopNode0/results.csv`. The analysis is carried out in the `analisis_resultados.ipynb` notebook.
+The complete results are located in `LaptopNode0/Resultados/` and `LaptopNode0/results.csv`.
 
 ## Requirements
 
@@ -124,7 +124,6 @@ node4 slots=4
 ```
 MatrixMultiplicationDistributed-Workshop/
 ├── README.md
-├── analisis_resultados.ipynb       # Performance analysis notebook
 ├── LaptopNode0/                    # Master node (code and results)
 │   ├── matmul.c                    # MPI matrix multiplication program
 │   ├── hostfile                    # Cluster node definition
@@ -148,4 +147,3 @@ MatrixMultiplicationDistributed-Workshop/
 - **MPI (OpenMPI)** — Distributed communication (`Scatter`, `Bcast`, `Gather`)
 - **Perl** — Benchmark automation
 - **CSV** — Results format
-- **Jupyter Notebook** — Performance analysis
